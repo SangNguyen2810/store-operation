@@ -40,7 +40,7 @@ function Dashboard({ asOf }: { asOf: string }) {
         {(data) => <KpiGrid items={toKpiItems(data)} />}
       </AsyncSection>
 
-      <div className="split">
+      <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start">
         <AsyncSection
           title="Revenue"
           query={revenue}

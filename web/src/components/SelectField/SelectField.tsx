@@ -1,3 +1,5 @@
+import { Field } from '../Field'
+
 export interface SelectOption {
   value: string
   label: string
@@ -14,15 +16,14 @@ interface Props {
 
 export function SelectField({ label, value, options, onChange, wide }: Props) {
   return (
-    <label className={wide ? 'field field-wide' : 'field'}>
-      <span className="field-label">{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
+    <Field label={label} wide={wide}>
+      <select className="w-full min-w-0" value={value} onChange={(e) => onChange(e.target.value)}>
         {options.map((o) => (
           <option key={o.value} value={o.value}>
             {o.label}
           </option>
         ))}
       </select>
-    </label>
+    </Field>
   )
 }

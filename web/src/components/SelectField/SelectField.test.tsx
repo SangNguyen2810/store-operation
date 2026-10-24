@@ -24,6 +24,6 @@ describe('SelectField', () => {
 
   it('can span the full row', () => {
     const { container } = render(<SelectField label="Store" value="" options={options} onChange={() => {}} wide />)
-    expect(container.querySelector('label')).toHaveClass('field-wide')
+    expect(container.querySelector('label')).toHaveAttribute('data-wide', 'true')
   })
 })

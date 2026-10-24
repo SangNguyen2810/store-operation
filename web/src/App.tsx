@@ -10,7 +10,7 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <main>
+        <main className="mx-auto grid max-w-[1100px] grid-cols-1 gap-4 px-4 pt-4 pb-12 sm:gap-6 sm:px-6 sm:pt-6 sm:pb-16 lg:max-w-[1280px] lg:px-8">
           <AppRoutes />
         </main>
       </BrowserRouter>

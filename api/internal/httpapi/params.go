@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/SangNguyen2810/store-operation/api/internal/analytics"
+	"github.com/SangNguyen2810/store-operation/api/internal/analytics/domain"
 )
 
 const (
@@ -16,13 +16,13 @@ const (
 	maxRangeDays  = 366
 	defaultLimit  = 10
 	maxLimit      = 50
-	defaultGranul = analytics.Day
+	defaultGranul = domain.Day
 )
 
 // parseFilter reads from, to and store. Missing dates default to the 30 days ending at asOf.
-func parseFilter(r *http.Request, asOf time.Time) (analytics.Filter, error) {
+func parseFilter(r *http.Request, asOf time.Time) (domain.Filter, error) {
 	q := r.URL.Query()
-	f := analytics.Filter{To: asOf, From: asOf.AddDate(0, 0, -(defaultDays - 1))}
+	f := domain.Filter{To: asOf, From: asOf.AddDate(0, 0, -(defaultDays - 1))}
 
 	var err error
 	if v := q.Get("to"); v != "" {
@@ -54,12 +54,12 @@ func parseFilter(r *http.Request, asOf time.Time) (analytics.Filter, error) {
 	return f, nil
 }
 
-func parseGranularity(r *http.Request) (analytics.Granularity, error) {
+func parseGranularity(r *http.Request) (domain.Granularity, error) {
 	v := r.URL.Query().Get("granularity")
 	if v == "" {
 		return defaultGranul, nil
 	}
-	g := analytics.Granularity(v)
+	g := domain.Granularity(v)
 	if !g.Valid() {
 		return "", errors.New("granularity: want day, week or month")
 	}

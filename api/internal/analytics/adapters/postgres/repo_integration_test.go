@@ -1,4 +1,4 @@
-package analytics_test
+package postgres_test
 
 import (
 	"context"
@@ -9,7 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/SangNguyen2810/store-operation/api/internal/analytics"
+	"github.com/SangNguyen2810/store-operation/api/internal/analytics/adapters/postgres"
+	"github.com/SangNguyen2810/store-operation/api/internal/analytics/domain"
 	"github.com/SangNguyen2810/store-operation/api/internal/db"
 )
 
@@ -42,7 +43,7 @@ func d(s string) time.Time {
 
 func near(a, b float64) bool { return math.Abs(a-b) < 0.005 }
 
-var fullRange = analytics.Filter{From: d("2022-01-01"), To: d("2022-12-31")}
+var fullRange = domain.Filter{From: d("2022-01-01"), To: d("2022-12-31")}
 
 func TestPoolIsReadOnly(t *testing.T) {
 	pool := testPool(t)
@@ -53,7 +54,7 @@ func TestPoolIsReadOnly(t *testing.T) {
 }
 
 func TestStores(t *testing.T) {
-	repo := analytics.NewPgRepo(testPool(t))
+	repo := postgres.New(testPool(t))
 	stores, err := repo.Stores(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +66,7 @@ func TestStores(t *testing.T) {
 
 func TestTotalsMatchSalesByStore(t *testing.T) {
 	pool := testPool(t)
-	repo := analytics.NewPgRepo(pool)
+	repo := postgres.New(pool)
 	ctx := context.Background()
 
 	var viewTotal float64
@@ -98,7 +99,7 @@ func TestTotalsMatchSalesByStore(t *testing.T) {
 
 func TestTotalsWindowMatchesRawSQL(t *testing.T) {
 	pool := testPool(t)
-	f := analytics.Filter{From: d("2022-06-28"), To: d("2022-07-27")}
+	f := domain.Filter{From: d("2022-06-28"), To: d("2022-07-27")}
 	var rev float64
 	var payments, rentals, customers int
 	ctx := context.Background()
@@ -112,7 +113,7 @@ func TestTotalsWindowMatchesRawSQL(t *testing.T) {
 		Scan(&rentals, &customers); err != nil {
 		t.Fatal(err)
 	}
-	got, err := analytics.NewPgRepo(pool).Totals(ctx, f)
+	got, err := postgres.New(pool).Totals(ctx, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,15 +123,15 @@ func TestTotalsWindowMatchesRawSQL(t *testing.T) {
 }
 
 func TestRevenueSeries(t *testing.T) {
-	repo := analytics.NewPgRepo(testPool(t))
+	repo := postgres.New(testPool(t))
 	ctx := context.Background()
-	f := analytics.Filter{From: d("2022-03-01"), To: d("2022-03-31")}
+	f := domain.Filter{From: d("2022-03-01"), To: d("2022-03-31")}
 
 	totals, err := repo.Totals(ctx, f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, g := range []analytics.Granularity{analytics.Day, analytics.Week, analytics.Month} {
+	for _, g := range []domain.Granularity{domain.Day, domain.Week, domain.Month} {
 		pts, err := repo.Revenue(ctx, f, g)
 		if err != nil {
 			t.Fatalf("%s: %v", g, err)
@@ -144,13 +145,13 @@ func TestRevenueSeries(t *testing.T) {
 		}
 	}
 
-	days, _ := repo.Revenue(ctx, f, analytics.Day)
+	days, _ := repo.Revenue(ctx, f, domain.Day)
 	if len(days) != 31*2 {
 		t.Errorf("daily series has %d rows, want 62 (31 days x 2 stores, zero-filled)", len(days))
 	}
 
 	// A window with no payments is still fully zero-filled.
-	empty, err := repo.Revenue(ctx, analytics.Filter{From: d("2023-01-01"), To: d("2023-01-03")}, analytics.Day)
+	empty, err := repo.Revenue(ctx, domain.Filter{From: d("2023-01-01"), To: d("2023-01-03")}, domain.Day)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +165,7 @@ func TestRevenueSeries(t *testing.T) {
 	}
 
 	store := 2
-	one, err := repo.Revenue(ctx, analytics.Filter{From: f.From, To: f.To, StoreID: &store}, analytics.Day)
+	one, err := repo.Revenue(ctx, domain.Filter{From: f.From, To: f.To, StoreID: &store}, domain.Day)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +175,7 @@ func TestRevenueSeries(t *testing.T) {
 }
 
 func TestRevenueRejectsBadGranularity(t *testing.T) {
-	_, err := analytics.NewPgRepo(testPool(t)).Revenue(context.Background(), fullRange, "year")
+	_, err := postgres.New(testPool(t)).Revenue(context.Background(), fullRange, "year")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -183,7 +184,7 @@ func TestRevenueRejectsBadGranularity(t *testing.T) {
 func TestTopFilms(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
-	films, err := analytics.NewPgRepo(pool).TopFilms(ctx, fullRange, 5)
+	films, err := postgres.New(pool).TopFilms(ctx, fullRange, 5)
 	if err != nil {
 		t.Fatal(err)
 	}

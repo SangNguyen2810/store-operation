@@ -10,30 +10,30 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SangNguyen2810/store-operation/api/internal/analytics"
+	"github.com/SangNguyen2810/store-operation/api/internal/analytics/domain"
 )
 
 type fakeSvc struct {
-	filter analytics.Filter
-	gran   analytics.Granularity
+	filter domain.Filter
+	gran   domain.Granularity
 	limit  int
 	err    error
 }
 
-func (f *fakeSvc) Stores(context.Context) ([]analytics.Store, error) {
-	return []analytics.Store{{ID: 1, Label: "A"}}, f.err
+func (f *fakeSvc) Stores(context.Context) ([]domain.Store, error) {
+	return []domain.Store{{ID: 1, Label: "A"}}, f.err
 }
-func (f *fakeSvc) KPIs(_ context.Context, fl analytics.Filter) (analytics.KPIs, error) {
+func (f *fakeSvc) KPIs(_ context.Context, fl domain.Filter) (domain.KPIs, error) {
 	f.filter = fl
-	return analytics.KPIs{}, f.err
+	return domain.KPIs{}, f.err
 }
-func (f *fakeSvc) Revenue(_ context.Context, fl analytics.Filter, g analytics.Granularity) ([]analytics.RevenuePoint, error) {
+func (f *fakeSvc) Revenue(_ context.Context, fl domain.Filter, g domain.Granularity) ([]domain.RevenuePoint, error) {
 	f.filter, f.gran = fl, g
-	return []analytics.RevenuePoint{}, f.err
+	return []domain.RevenuePoint{}, f.err
 }
-func (f *fakeSvc) TopFilms(_ context.Context, fl analytics.Filter, n int) ([]analytics.FilmStat, error) {
+func (f *fakeSvc) TopFilms(_ context.Context, fl domain.Filter, n int) ([]domain.FilmStat, error) {
 	f.filter, f.limit = fl, n
-	return []analytics.FilmStat{}, f.err
+	return []domain.FilmStat{}, f.err
 }
 
 type fakeDB struct{ err error }
@@ -58,7 +58,7 @@ func TestDefaults(t *testing.T) {
 	if got := svc.filter.From.Format("2006-01-02"); got != "2022-06-28" {
 		t.Errorf("default from = %s, want 2022-06-28", got)
 	}
-	if !svc.filter.To.Equal(asOf) || svc.gran != analytics.Day || svc.filter.StoreID != nil {
+	if !svc.filter.To.Equal(asOf) || svc.gran != domain.Day || svc.filter.StoreID != nil {
 		t.Errorf("unexpected defaults: %+v gran=%s", svc.filter, svc.gran)
 	}
 }
@@ -69,7 +69,7 @@ func TestParamsPassedThrough(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
-	if svc.filter.StoreID == nil || *svc.filter.StoreID != 2 || svc.gran != analytics.Week {
+	if svc.filter.StoreID == nil || *svc.filter.StoreID != 2 || svc.gran != domain.Week {
 		t.Errorf("got %+v gran=%s", svc.filter, svc.gran)
 	}
 	do(t, svc, fakeDB{}, "/api/top/films?limit=3")

@@ -1,9 +1,11 @@
-package analytics
+package app
 
 import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/SangNguyen2810/store-operation/api/internal/analytics/domain"
 )
 
 func day(s string) time.Time {
@@ -16,39 +18,19 @@ func day(s string) time.Time {
 
 type fakeRepo struct {
 	Repo
-	byFrom map[time.Time]Totals
-	seen   []Filter
+	byFrom map[time.Time]domain.Totals
+	seen   []domain.Filter
 }
 
-func (f *fakeRepo) Totals(_ context.Context, flt Filter) (Totals, error) {
+func (f *fakeRepo) Totals(_ context.Context, flt domain.Filter) (domain.Totals, error) {
 	f.seen = append(f.seen, flt)
 	return f.byFrom[flt.From], nil
 }
 
-func TestPreviousWindow(t *testing.T) {
-	cases := []struct {
-		name             string
-		from, to         string
-		wantFrom, wantTo string
-	}{
-		{"30 days", "2022-06-28", "2022-07-27", "2022-05-29", "2022-06-27"},
-		{"single day", "2022-07-27", "2022-07-27", "2022-07-26", "2022-07-26"},
-		{"across year", "2022-01-05", "2022-01-11", "2021-12-29", "2022-01-04"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := previousWindow(Filter{From: day(c.from), To: day(c.to)})
-			if !got.From.Equal(day(c.wantFrom)) || !got.To.Equal(day(c.wantTo)) {
-				t.Fatalf("got %s..%s, want %s..%s", got.From.Format("2006-01-02"), got.To.Format("2006-01-02"), c.wantFrom, c.wantTo)
-			}
-		})
-	}
-}
-
 func TestKPIsDeltas(t *testing.T) {
-	cur := Filter{From: day("2022-07-01"), To: day("2022-07-10")}
-	prev := previousWindow(cur)
-	repo := &fakeRepo{byFrom: map[time.Time]Totals{
+	cur := domain.Filter{From: day("2022-07-01"), To: day("2022-07-10")}
+	prev := cur.PreviousWindow()
+	repo := &fakeRepo{byFrom: map[time.Time]domain.Totals{
 		cur.From:  {Revenue: 150, Payments: 30, Rentals: 40, ActiveCustomers: 10},
 		prev.From: {Revenue: 100, Payments: 20, Rentals: 0, ActiveCustomers: 10},
 	}}
@@ -71,8 +53,8 @@ func TestKPIsDeltas(t *testing.T) {
 }
 
 func TestKPIsNoPayments(t *testing.T) {
-	cur := Filter{From: day("2022-07-01"), To: day("2022-07-10")}
-	k, err := NewService(&fakeRepo{byFrom: map[time.Time]Totals{}}).KPIs(context.Background(), cur)
+	cur := domain.Filter{From: day("2022-07-01"), To: day("2022-07-10")}
+	k, err := NewService(&fakeRepo{byFrom: map[time.Time]domain.Totals{}}).KPIs(context.Background(), cur)
 	if err != nil {
 		t.Fatal(err)
 	}

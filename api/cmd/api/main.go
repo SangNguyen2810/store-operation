@@ -10,7 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/SangNguyen2810/store-operation/api/internal/analytics"
+	"github.com/SangNguyen2810/store-operation/api/internal/analytics/adapters/postgres"
+	"github.com/SangNguyen2810/store-operation/api/internal/analytics/app"
 	"github.com/SangNguyen2810/store-operation/api/internal/config"
 	"github.com/SangNguyen2810/store-operation/api/internal/db"
 	"github.com/SangNguyen2810/store-operation/api/internal/httpapi"
@@ -37,7 +38,7 @@ func run() error {
 	}
 	defer pool.Close()
 
-	svc := analytics.NewService(analytics.NewPgRepo(pool))
+	svc := app.NewService(postgres.New(pool))
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           httpapi.New(svc, pool, cfg.AsOf),

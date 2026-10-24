@@ -7,15 +7,15 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/SangNguyen2810/store-operation/api/internal/analytics"
+	"github.com/SangNguyen2810/store-operation/api/internal/analytics/domain"
 )
 
-// Analytics is what the handlers need; *analytics.Service satisfies it.
+// Analytics is what the handlers need; *app.Service satisfies it.
 type Analytics interface {
-	Stores(ctx context.Context) ([]analytics.Store, error)
-	KPIs(ctx context.Context, f analytics.Filter) (analytics.KPIs, error)
-	Revenue(ctx context.Context, f analytics.Filter, g analytics.Granularity) ([]analytics.RevenuePoint, error)
-	TopFilms(ctx context.Context, f analytics.Filter, limit int) ([]analytics.FilmStat, error)
+	Stores(ctx context.Context) ([]domain.Store, error)
+	KPIs(ctx context.Context, f domain.Filter) (domain.KPIs, error)
+	Revenue(ctx context.Context, f domain.Filter, g domain.Granularity) ([]domain.RevenuePoint, error)
+	TopFilms(ctx context.Context, f domain.Filter, limit int) ([]domain.FilmStat, error)
 }
 
 type Pinger interface {

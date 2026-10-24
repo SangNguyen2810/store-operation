@@ -1,4 +1,6 @@
-package analytics
+// Package postgres implements the analytics Repo port against Pagila. It owns
+// all of the SQL; nothing else may query these tables.
+package postgres
 
 import (
 	"context"
@@ -6,15 +8,17 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SangNguyen2810/store-operation/api/internal/analytics/domain"
 )
 
-// PgRepo reads Pagila directly. Revenue is attributed to a store through
+// Repo reads Pagila directly. Revenue is attributed to a store through
 // payment -> rental -> inventory.store_id, the same rule as the sales_by_store view.
-type PgRepo struct{ pool *pgxpool.Pool }
+type Repo struct{ pool *pgxpool.Pool }
 
-func NewPgRepo(pool *pgxpool.Pool) *PgRepo { return &PgRepo{pool: pool} }
+func New(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
 
-func (r *PgRepo) Stores(ctx context.Context) ([]Store, error) {
+func (r *Repo) Stores(ctx context.Context) ([]domain.Store, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT s.store_id, c.city || ', ' || co.country
 		FROM store s
@@ -26,15 +30,15 @@ func (r *PgRepo) Stores(ctx context.Context) ([]Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query stores: %w", err)
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Store, error) {
-		var s Store
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.Store, error) {
+		var s domain.Store
 		err := row.Scan(&s.ID, &s.Label)
 		return s, err
 	})
 }
 
-func (r *PgRepo) Totals(ctx context.Context, f Filter) (Totals, error) {
-	var t Totals
+func (r *Repo) Totals(ctx context.Context, f domain.Filter) (domain.Totals, error) {
+	var t domain.Totals
 	err := r.pool.QueryRow(ctx, `
 		WITH pay AS (
 			SELECT COALESCE(sum(p.amount), 0)::float8 AS revenue, count(*) AS n
@@ -51,16 +55,16 @@ func (r *PgRepo) Totals(ctx context.Context, f Filter) (Totals, error) {
 			  AND ($3::int IS NULL OR i.store_id = $3)
 		)
 		SELECT pay.revenue, pay.n, ren.rentals, ren.customers FROM pay, ren`,
-		f.From, endExclusive(f), f.StoreID,
+		f.From, f.EndExclusive(), f.StoreID,
 	).Scan(&t.Revenue, &t.Payments, &t.Rentals, &t.ActiveCustomers)
 	if err != nil {
-		return Totals{}, fmt.Errorf("query totals: %w", err)
+		return domain.Totals{}, fmt.Errorf("query totals: %w", err)
 	}
 	return t, nil
 }
 
 // Revenue returns one row per (bucket, store), zero-filled so charts have no gaps.
-func (r *PgRepo) Revenue(ctx context.Context, f Filter, g Granularity) ([]RevenuePoint, error) {
+func (r *Repo) Revenue(ctx context.Context, f domain.Filter, g domain.Granularity) ([]domain.RevenuePoint, error) {
 	if !g.Valid() {
 		return nil, fmt.Errorf("invalid granularity %q", g)
 	}
@@ -84,18 +88,18 @@ func (r *PgRepo) Revenue(ctx context.Context, f Filter, g Granularity) ([]Revenu
 		CROSS JOIN stores s
 		LEFT JOIN sales x ON x.bucket = b.bucket AND x.store_id = s.store_id
 		ORDER BY b.bucket, s.store_id`,
-		f.From, endExclusive(f), string(g), f.StoreID)
+		f.From, f.EndExclusive(), string(g), f.StoreID)
 	if err != nil {
 		return nil, fmt.Errorf("query revenue: %w", err)
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (RevenuePoint, error) {
-		var p RevenuePoint
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.RevenuePoint, error) {
+		var p domain.RevenuePoint
 		err := row.Scan(&p.Bucket, &p.StoreID, &p.Revenue)
 		return p, err
 	})
 }
 
-func (r *PgRepo) TopFilms(ctx context.Context, f Filter, limit int) ([]FilmStat, error) {
+func (r *Repo) TopFilms(ctx context.Context, f domain.Filter, limit int) ([]domain.FilmStat, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT fi.film_id, fi.title, count(DISTINCT r.rental_id), sum(p.amount)::float8
 		FROM payment p
@@ -107,12 +111,12 @@ func (r *PgRepo) TopFilms(ctx context.Context, f Filter, limit int) ([]FilmStat,
 		GROUP BY fi.film_id, fi.title
 		ORDER BY sum(p.amount) DESC, fi.film_id
 		LIMIT $4`,
-		f.From, endExclusive(f), f.StoreID, limit)
+		f.From, f.EndExclusive(), f.StoreID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query top films: %w", err)
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (FilmStat, error) {
-		var s FilmStat
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.FilmStat, error) {
+		var s domain.FilmStat
 		err := row.Scan(&s.FilmID, &s.Title, &s.Rentals, &s.Revenue)
 		return s, err
 	})

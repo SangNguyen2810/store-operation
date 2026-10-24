@@ -1,6 +1,6 @@
-// Package analytics answers read-only revenue and rental questions about
-// Pagila. It owns all of its SQL; nothing else may query these tables.
-package analytics
+// Package domain holds the analytics types and rules. It imports nothing but
+// the standard library: no database, no HTTP.
+package domain
 
 import "time"
 

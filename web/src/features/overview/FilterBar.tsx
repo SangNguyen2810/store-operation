@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { Filters, Granularity, Store } from '../../api/types'
 import { daysInclusive, isIsoDate } from '../../lib/dates'
-import { GRANULARITIES, MAX_DAYS, PRESETS, activePanelFilters, defaultFilters, presetFilters } from './filters'
+import { GRANULARITIES, MAX_DAYS, PRESETS, activePanelFilters, defaultFilters, presetFilters } from '../../lib/filters'
 
 interface Props {
   filters: Filters

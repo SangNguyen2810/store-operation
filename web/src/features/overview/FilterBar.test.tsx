@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { FilterBar } from './FilterBar'
-import { defaultFilters } from './filters'
+import { defaultFilters } from '../../lib/filters'
 
 const ASOF = '2022-07-27'
 const stores = [

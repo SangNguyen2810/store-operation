@@ -4,7 +4,7 @@ import { Suspense, lazy } from 'react'
 import { FilterBar } from './FilterBar'
 import { KpiCards, KpiSkeleton } from './KpiCards'
 import { TopFilms, TopFilmsSkeleton } from './TopFilms'
-import { useFilters, useKpis, useMeta, useRevenue, useStores, useTopFilms } from './hooks'
+import { useFilters, useKpis, useMeta, useRevenue, useStores, useTopFilms } from '../../hooks'
 import { formatBucket } from '../../lib/format'
 
 // The chart library is the heaviest dependency, so it loads on demand.

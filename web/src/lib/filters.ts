@@ -1,5 +1,5 @@
-import type { Filters, Granularity } from '../../api/types'
-import { addDays, isIsoDate } from '../../lib/dates'
+import type { Filters, Granularity } from '../api/types'
+import { addDays, isIsoDate } from './dates'
 
 export const DEFAULT_DAYS = 30
 export const MAX_DAYS = 366

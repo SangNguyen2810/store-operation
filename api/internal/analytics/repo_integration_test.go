@@ -9,11 +9,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/sangnguyen/pagila-dashboard/api/internal/analytics"
-	"github.com/sangnguyen/pagila-dashboard/api/internal/db"
+	"github.com/SangNguyen2810/store-operation/api/internal/analytics"
+	"github.com/SangNguyen2810/store-operation/api/internal/db"
 )
 
-// These tests read the live Pagila database (read-only) and skip when it is unreachable.
+// These tests read the live Pagila database (read-only) and skip when it is unreachable (fail if REQUIRE_DB is set, as in CI).
 // Expected values come from independent SQL: the sales_by_store view and raw tables.
 
 func testPool(t *testing.T) *pgxpool.Pool {
@@ -26,6 +26,9 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	defer cancel()
 	pool, err := db.Open(ctx, url)
 	if err != nil {
+		if os.Getenv("REQUIRE_DB") != "" {
+			t.Fatalf("pagila not reachable: %v", err)
+		}
 		t.Skipf("pagila not reachable: %v", err)
 	}
 	t.Cleanup(pool.Close)

@@ -1,4 +1,4 @@
-module github.com/sangnguyen/pagila-dashboard/api
+module github.com/SangNguyen2810/store-operation/api
 
 go 1.25.0
 

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sangnguyen/pagila-dashboard/api/internal/analytics"
+	"github.com/SangNguyen2810/store-operation/api/internal/analytics"
 )
 
 type fakeSvc struct {

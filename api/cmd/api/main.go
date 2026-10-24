@@ -10,10 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sangnguyen/pagila-dashboard/api/internal/analytics"
-	"github.com/sangnguyen/pagila-dashboard/api/internal/config"
-	"github.com/sangnguyen/pagila-dashboard/api/internal/db"
-	"github.com/sangnguyen/pagila-dashboard/api/internal/httpapi"
+	"github.com/SangNguyen2810/store-operation/api/internal/analytics"
+	"github.com/SangNguyen2810/store-operation/api/internal/config"
+	"github.com/SangNguyen2810/store-operation/api/internal/db"
+	"github.com/SangNguyen2810/store-operation/api/internal/httpapi"
 )
 
 func main() {

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/sangnguyen/pagila-dashboard/api/internal/analytics"
+	"github.com/SangNguyen2810/store-operation/api/internal/analytics"
 )
 
 // Analytics is what the handlers need; *analytics.Service satisfies it.

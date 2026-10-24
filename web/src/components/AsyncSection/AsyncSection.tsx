@@ -1,9 +1,23 @@
-import type { UseQueryResult } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
+import { ErrorState } from '../ErrorState'
+
+/**
+ * The part of a query result this component reads. Any react-query result fits,
+ * but nothing here imports react-query, so the component stays pure UI.
+ */
+export interface QueryState<T> {
+  data: T | undefined
+  error: Error | null
+  isError: boolean
+  isPending: boolean
+  isFetching: boolean
+  isPlaceholderData: boolean
+  refetch: () => unknown
+}
 
 interface Props<T> {
   title: string
-  query: UseQueryResult<T, Error>
+  query: QueryState<T>
   isEmpty?: (data: T) => boolean
   skeleton: ReactNode
   children: (data: T) => ReactNode
@@ -19,12 +33,10 @@ export function AsyncSection<T>({ title, query, isEmpty, skeleton, children }: P
 
   if (query.isError) {
     body = (
-      <div className="state state-error" role="alert">
-        <p>Couldn't load {title.toLowerCase()}: {query.error.message}</p>
-        <button type="button" onClick={() => void query.refetch()}>
-          Retry
-        </button>
-      </div>
+      <ErrorState
+        message={`Couldn't load ${title.toLowerCase()}: ${query.error?.message ?? 'unknown error'}`}
+        onRetry={() => void query.refetch()}
+      />
     )
   } else if (query.isPending) {
     body = (
@@ -32,10 +44,10 @@ export function AsyncSection<T>({ title, query, isEmpty, skeleton, children }: P
         {skeleton}
       </div>
     )
-  } else if (isEmpty?.(query.data)) {
+  } else if (isEmpty?.(query.data as T)) {
     body = <p className="state state-empty">No data for this period. Try a wider date range.</p>
   } else {
-    body = children(query.data)
+    body = children(query.data as T)
   }
 
   return (

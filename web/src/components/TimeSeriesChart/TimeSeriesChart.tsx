@@ -1,4 +1,4 @@
-import { useBreakpoint } from '../lib/useBreakpoint'
+import { useBreakpoint } from '../../lib/useBreakpoint'
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 
 export interface Series {

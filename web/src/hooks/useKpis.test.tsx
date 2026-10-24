@@ -1,11 +1,12 @@
 import { waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { Filters } from '../api/types'
 import { renderHookWithProviders, stubApi } from '../test/utils'
 import { useKpis } from './useKpis'
 
 const metric = { value: 100, previous: 50, deltaPct: 100 }
 const kpis = { revenue: metric, rentals: metric, activeCustomers: metric, avgPayment: metric }
-const filters = { from: "2022-07-01", to: "2022-07-10", store: 2, granularity: "week" as const }
+const filters: Filters = { from: '2022-07-01', to: '2022-07-10', store: 2, granularity: 'week' }
 
 afterEach(() => vi.unstubAllGlobals())
 

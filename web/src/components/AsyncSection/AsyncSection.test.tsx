@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { renderWithProviders } from '../test/utils'
+import { renderWithProviders } from '../../test/utils'
 import { AsyncSection } from './AsyncSection'
 
 function Harness({ fn, empty }: { fn: () => Promise<string[]>; empty?: boolean }) {

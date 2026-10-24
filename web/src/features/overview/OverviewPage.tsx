@@ -1,4 +1,6 @@
 import { AsyncSection } from '../../components/AsyncSection'
+import { ErrorState } from '../../components/ErrorState'
+import { PageHeader } from '../../components/PageHeader'
 import { Skeleton } from '../../components/Skeleton'
 import { Suspense, lazy } from 'react'
 import { FilterBar } from './FilterBar'
@@ -13,12 +15,7 @@ const RevenueChart = lazy(() => import('./RevenueChart').then((m) => ({ default:
 export function OverviewPage() {
   const meta = useMeta()
   if (meta.isError) {
-    return (
-      <div className="state state-error" role="alert">
-        <p>Couldn't reach the API: {meta.error.message}</p>
-        <button type="button" onClick={() => void meta.refetch()}>Retry</button>
-      </div>
-    )
+    return <ErrorState message={`Couldn't reach the API: ${meta.error.message}`} onRetry={() => void meta.refetch()} />
   }
   if (!meta.data) return <div aria-busy="true"><Skeleton height={120} /></div>
   return <Dashboard asOf={meta.data.asOf} />
@@ -33,10 +30,7 @@ function Dashboard({ asOf }: { asOf: string }) {
 
   return (
     <>
-      <header className="page-header">
-        <h1>Store Operations</h1>
-        <p className="muted">Data as of {formatBucket(asOf)}, {asOf.slice(0, 4)}</p>
-      </header>
+      <PageHeader title="Store Operations" subtitle={<>Data as of {formatBucket(asOf)}, {asOf.slice(0, 4)}</>} />
 
       <FilterBar filters={filters} asOf={asOf} stores={stores.data ?? []} onChange={setFilters} />
 

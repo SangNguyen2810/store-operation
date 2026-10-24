@@ -46,7 +46,7 @@ A portfolio project for a Principal Frontend Engineer interview (React/Vue role)
 - **Performance:** the chart library is lazy-loaded (first load 300 kB, 95 kB gzipped).
 - Light and dark colour tokens.
 
-### Backend (phase 1): `analytics` package
+### Backend (phase 1): `analytics` context
 | Endpoint | Returns |
 |---|---|
 | `GET /healthz` | database ping |
@@ -60,11 +60,11 @@ Shared params: `from`, `to` (YYYY-MM-DD, inclusive, max 366 days), `store`; `gra
 
 ### Phase 2 (not started): Rentals Explorer
 - Frontend: server-side paginated, sortable, filterable table of rentals (status out/returned/overdue, store, category, customer search), cursor pagination or virtualised list, detail drawer with state in the URL, a reusable generic `DataTable<T>`.
-- Backend: a second package, `rentals` (`GET /rentals` with cursor, `GET /rentals/{id}`), with its own SQL and interface.
+- Backend: a second context, `internal/rentals/` (`GET /rentals` with cursor, `GET /rentals/{id}`), laid out like `analytics` (domain, app, adapters) and plugged in with its own `Register(mux, ...)`.
 - Needs its own acceptance criteria before work starts. "Overdue" needs the as-of date (rentals end 2022-08-23).
 
 ### Later (not started): microservices
-Turn each package into its own `cmd/<service>` binary with its own pool, add a gateway, then split the database. See the README for the seam.
+Turn each context into its own `cmd/<service>` binary with its own pool, add a gateway, then split the database. See the README for the seam.
 
 ### Out of scope
 Auth, caching (in-memory first, Redis later), Docker images for the app, Kubernetes, returns and late-fee handling, customer-facing site.
@@ -74,21 +74,47 @@ Auth, caching (in-memory first, Redis later), Docker images for the app, Kuberne
 ## 3. Architecture
 
 ```
-dashboard/
-  api/                       Go
-    cmd/api/                 main: config, pool, server, graceful shutdown
-    internal/analytics/      Service + Repo interface + Postgres repo. Owns all SQL.
-    internal/httpapi/        parsing, validation, JSON. No SQL.
-    internal/db/             read-only pool (default_transaction_read_only=on, 10s statement timeout)
-    internal/config/         environment settings
-  web/                       React 19 + TypeScript (strict) + Vite
-    src/api/                 typed client, one function per endpoint
-    src/features/overview/   filters (URL state), query hooks, page and its parts
-    src/components/          AsyncSection, Skeleton, TimeSeriesChart (the only file that imports Recharts)
-  Makefile, .env.example, README.md, docs/PLAN.md
+api/                                 Go, one go.mod
+  cmd/api/                           composition root: config, pool, mux, graceful shutdown
+  internal/
+    analytics/                       one bounded context, hexagonal inside
+      domain/                        types and pure rules (window, delta, KPIs). Standard library only.
+      app/                           use cases (Service) + ports.go (Repo, the driven port). Imports domain only.
+      adapters/
+        postgres/                    implements Repo; owns all the SQL
+        http/                        (package httpadapter) routes, parsing, validation, response types
+    platform/                        shared plumbing, knows no context
+      db/                            read-only pool (default_transaction_read_only=on, 10s statement timeout)
+      config/                        environment settings
+      httpx/                         JSON and problem responses, request logging, /healthz, /api/meta
+    archtest/                        test that enforces the import rules below
+web/                                 React 19 + TypeScript (strict) + Vite
+  src/api/                           typed client, one function per endpoint
+  src/features/overview/             filters (URL state), query hooks, page and its parts
+  src/components/                    AsyncSection, Skeleton, TimeSeriesChart (the only file that imports Recharts)
+Makefile, .env.example, README.md, docs/PLAN.md, .github/workflows/ci.yml
 ```
 
-Key seams: `analytics` reaches the database only through `Repo`; `httpapi` depends on a small `Analytics` interface; the chart library is isolated; `AsyncSection` is the single place for query states.
+### Backend layering (hexagonal, one context per module)
+
+Dependencies point inward only. `internal/archtest` fails `go test ./...` (so CI) when one is broken.
+
+| Layer | May import |
+|---|---|
+| `domain` | standard library |
+| `app` | standard library, its own `domain` |
+| `adapters/*` | its own `domain` and `app`, `platform`, third-party. Never another adapter. |
+| `platform` | no context |
+| a context | itself and `platform`, never another context |
+| `cmd` | anything (composition root) |
+
+Decisions:
+- **Packages in one `go.mod`, not one module per context.** Separate modules and a `go.work` only pay off once there are two or more real contexts. Revisit when `rentals` exists.
+- **Response types live in the HTTP adapter.** The domain has no `json` tags, so the domain can change without breaking the API, and the transport can change (for example to gRPC) without touching the domain.
+- **No extra repository/service/controller layers** on top of hexagonal. They would add files without adding a boundary.
+- **Shared endpoints** (`/healthz`, `/api/meta`) are not analytics concerns, so `cmd/api` registers them next to each context's `Register(mux, ...)`.
+
+Other key seams: the chart library is isolated; `AsyncSection` is the single place for query states.
 
 ---
 
@@ -122,7 +148,21 @@ Key seams: `analytics` reaches the database only through `Repo`; `httpapi` depen
 
 ---
 
-## 5. Done: published to GitHub with CI
+## 5. Done: backend refactor to hexagonal contexts
+
+Requirements were confirmed first: packages in one `go.mod`, re-layer `analytics` only, hexagonal without extra layers.
+
+| Phase | What | Verified |
+|---|---|---|
+| 1 | Split `analytics` into `domain`, `app` (with the `Repo` port) and `adapters/postgres`. Pure rules became exported domain methods. | `go test ./...`; the 7 integration tests ran against live Pagila |
+| 2 | `httpapi` became `adapters/http` with its own response types; `db`, `config` and shared HTTP helpers moved to `platform/`; `main` builds the mux. | 16 requests (every endpoint, filters, empty ranges, 400s) returned byte-identical responses before and after |
+| 3 | Added `internal/archtest` to enforce the import rules; README and this plan updated. | `make check` clean; a planted violation is caught |
+
+Acceptance criteria: no behavior change (met), layers hold and are enforced in CI (met), domain has no transport tags (met), contexts are isolated (met), tests moved and pass (met), docs match (met).
+
+---
+
+## 6. Done: published to GitHub with CI
 
 **Repo:** https://github.com/SangNguyen2810/store-operation. Phase 1 is on `main`; the Pagila checkout and its upstream are untouched.
 
@@ -146,7 +186,7 @@ Key seams: `analytics` reaches the database only through `Repo`; `httpapi` depen
 
 ---
 
-## 6. Next steps, in order
+## 7. Next steps, in order
 
 1. Check the first CI run on GitHub and fix what fails.
 2. Phase 2: write requirements and acceptance criteria for the Rentals Explorer, plan, then build.

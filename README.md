@@ -89,23 +89,57 @@ curl 'http://localhost:8080/api/kpis?from=2022-06-28&to=2022-07-27'
 ## Architecture
 
 ```
-┌────────────────────┐   /api/*   ┌──────────────────────────┐        ┌───────────┐
-│  web (React 19)    │ ─────────▶ │  api (Go, net/http)      │ ─────▶ │  Pagila   │
-│  Vite, TanStack    │            │  httpapi → analytics     │  pgx   │ PostgreSQL│
-│  Query             │ ◀───────── │  read-only pool          │ ◀───── │ (read-only)│
-└────────────────────┘    JSON    └──────────────────────────┘        └───────────┘
+┌────────────────────┐   /api/*   ┌──────────────────────────────┐        ┌────────────┐
+│  web (React 19)    │ ─────────▶ │  api (Go, net/http)          │ ─────▶ │  Pagila    │
+│  Vite, TanStack    │            │  hexagonal, one context per  │  pgx   │ PostgreSQL │
+│  Query             │ ◀───────── │  module, read-only pool      │ ◀───── │ (read-only)│
+└────────────────────┘    JSON    └──────────────────────────────┘        └────────────┘
+```
+
+### Backend: hexagonal contexts
+
+Each business area is a **bounded context** with its own domain, use cases and adapters. Dependencies point inward only.
+
+```
+api/
+  cmd/api/                       composition root: wires contexts, serves HTTP
+  internal/
+    analytics/                   one context
+      domain/                    types and pure rules. Standard library only.
+      app/                       use cases + ports.go (the Repo port). Imports domain only.
+      adapters/
+        postgres/                driven adapter: implements Repo, owns all SQL
+        http/                    driving adapter: routes, validation, response types
+    platform/                    shared plumbing that knows no context
+      db/  config/  httpx/       read-only pool, env config, JSON/problem/logging/health
+    archtest/                    enforces the import rules below
 ```
 
 ```
-web/                         React 19, TypeScript, Vite, TanStack Query
+ HTTP request ─▶ adapters/http ─▶ app (use case) ─▶ domain
+                                      │
+                              Repo port (interface)
+                                      ▲
+                               adapters/postgres ─▶ Pagila
+```
+
+| Layer | May import |
+|---|---|
+| `domain` | standard library |
+| `app` | standard library, its own `domain` |
+| `adapters/*` | its own `domain` and `app`, `platform`, third-party. Never another adapter |
+| `platform` | no context |
+| a context | itself and `platform`, never another context |
+
+`internal/archtest` checks these rules on every `go test ./...`, so CI fails if a layer reaches the wrong way.
+
+### Frontend
+
+```
+web/
   src/api/                   typed client, one function per endpoint
   src/features/overview/     URL filter state, query hooks, page and its parts
   src/components/            AsyncSection (loading/empty/error), TimeSeriesChart
-
-api/                         Go, net/http, pgx
-  internal/analytics/        Service + Repo interface + Postgres repo. Owns all SQL.
-  internal/httpapi/          Parsing, validation, JSON. No SQL.
-  internal/db/               Read-only pool
 ```
 
 ### Design decisions
@@ -115,15 +149,27 @@ api/                         Go, net/http, pgx
 - **The chart library is isolated** in `TimeSeriesChart` and lazy-loaded. Swapping it touches one file, and the first load stays small.
 - **Store attribution follows the `sales_by_store` view:** `payment → rental → inventory.store_id`. Staff-based attribution does not work in this dataset.
 - **Accessible by default.** Controls are keyboard-reachable, deltas are conveyed by arrow and text rather than colour alone, and the chart has a text alternative and a table view.
-- **SQL stays in one place.** `analytics` reaches the database only through the `Repo` interface; `httpapi` depends on a small `Analytics` interface.
+- **The API contract is separate from the domain.** Response types live in the HTTP adapter, so the domain has no `json` tags and can change without breaking clients.
+- **SQL stays in one place.** The Postgres adapter is the only code that queries these tables.
+- **Packages in one `go.mod`.** Splitting into separate Go modules only pays off once there are two or more real contexts.
+
+## Adding a context
+
+To add one (for example `rentals`):
+
+1. Create `internal/rentals/{domain,app,adapters/postgres,adapters/http}`, following `analytics`.
+2. Define the repository port in `app/ports.go` and implement it in `adapters/postgres`.
+3. Expose `Register(mux, ...)` from `adapters/http`, and call it in `cmd/api/main.go`.
+4. Run `go test ./...`. The architecture test covers the new context automatically.
 
 ## Testing and CI
 
 | Layer | Coverage |
 |---|---|
-| `api` unit | Window and delta maths |
-| `api` handlers | Defaults, parameter passthrough, 10 bad-input cases, no leaked internals, health, 405 |
-| `api` integration | Totals reconciled against the `sales_by_store` view and raw SQL; revenue series sums to the KPI total at every granularity; zero-fill; top films; pool rejects writes |
+| `api` domain and app | Window and delta maths, KPI comparison with a fake `Repo` |
+| `api` HTTP adapter | Defaults, parameter passthrough, 10 bad-input cases, no leaked internals, health, 405 |
+| `api` Postgres adapter (integration) | Totals reconciled against the `sales_by_store` view and raw SQL; revenue series sums to the KPI total at every granularity; zero-fill; top films; pool rejects writes |
+| `api` architecture | Import rules between layers and contexts, plus a check that the rules catch violations |
 | `web` | URL and filter parsing, formatting, data shaping, `AsyncSection` states, KPI cards, filter bar, the page against a mocked API |
 
 Correctness is checked against SQL written independently of the code under test.
@@ -139,13 +185,14 @@ Correctness is checked against SQL written independently of the code under test.
 
 The seams are already in place:
 
-1. `analytics` talks to the database only through the `Repo` interface and owns its SQL. A future `rentals` package should do the same, with no cross-package queries.
-2. `httpapi` depends on a small `Analytics` interface, not a concrete type.
-3. To split: give each package its own `cmd/<service>` binary and its own `db.Open` pool, put a gateway in front that routes `/api/*` (the web app only talks to `/api`), then move each package's tables into its own database. Cross-service data, such as a rental's customer name, becomes an API call or a replicated snapshot instead of a join.
+1. Each context reaches its database only through its own `Repo` port and owns its SQL, and the architecture test stops one context importing another. A future `rentals` context does the same, with no cross-context queries.
+2. The HTTP adapter depends on a small `Analytics` interface, not a concrete type.
+3. To split: give each context its own `cmd/<service>` binary and its own `db.Open` pool, put a gateway in front that routes `/api/*` (the web app only talks to `/api`), then move each context's tables into its own database. Cross-service data, such as a rental's customer name, goes behind a port: the in-process implementation is swapped for an HTTP or gRPC client, or a replicated snapshot, instead of a join.
 
 ## Project status and roadmap
 
 - [x] **Phase 1: Overview.** KPIs, revenue by store, top films, URL filters.
+- [x] **Backend refactor.** Hexagonal contexts with enforced layer rules.
 - [ ] **Phase 2: Rentals Explorer.** Not started.
 - [ ] **Microservices split.** Separate binaries, a gateway, then separate databases.
 

@@ -2,7 +2,7 @@
 
 A portfolio project for a Principal Frontend Engineer interview (React/Vue role), built on the Pagila DVD-rental database. It is meant to be walked through on screen as a code sample, so the plan favours clear structure and explainable trade-offs over feature count.
 
-**Status:** Phase 1 is built and verified locally. Publishing it to GitHub with CI is in progress and not finished. Phase 2 and the microservices split are not started.
+**Status:** Phase 1 is built, verified, and published to GitHub with a CI workflow. CI has no database yet, so the integration tests skip there. Phase 2 and the microservices split are not started.
 
 ---
 
@@ -119,37 +119,36 @@ Key seams: `analytics` reaches the database only through `Repo`; `httpapi` depen
 ### Known gaps
 - Dark mode is defined but never rendered or checked.
 - jsdom cannot render the chart SVG, so tests cover the data, summary and table, not the lines.
-- Nothing has been committed yet.
 
 ---
 
-## 5. In progress: publish to GitHub with CI
+## 5. Done: published to GitHub with CI
 
-**Target:** https://github.com/SangNguyen2810/store-operation (it appeared empty when checked). Only `dashboard/` goes in, as the root of that repo. Your pagila checkout and its `origin` (upstream `devrimgunduz/pagila`) are not touched, and nothing is pushed there.
+**Repo:** https://github.com/SangNguyen2810/store-operation. Phase 1 is on `main`; the Pagila checkout and its upstream are untouched.
 
-**Approach**
-1. Build the new repo in a scratch copy of `dashboard/` (without `node_modules`, `dist`, `bin`), so the pagila working tree stays clean.
-2. Add `.github/workflows/ci.yml` with two jobs:
-   - **api:** set up Go from `api/go.mod`, check `gofmt`, `go vet`, run `go test` with a Postgres service loaded with Pagila.
-   - **web:** Node 22, `npm ci`, `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`.
-3. Fix README links that point outside the folder, and tell people to run Pagila from its own repo.
-4. Commit and push to `main`, then watch the first CI run and fix what fails.
+**What was done**
+- Initial commit of the dashboard, then a rename of the Go module (`github.com/SangNguyen2810/store-operation/api`) and the web package (`store-operation-web`), then the CI workflow.
+- `.github/workflows/ci.yml` runs on pushes to `main` and on pull requests, with two jobs:
+  - **api:** Go from `api/go.mod`, `gofmt`, `go vet`, `go test`, `go build`.
+  - **web:** Node 22, `npm ci`, lint, typecheck, tests, build.
+- Integration tests fail instead of skipping when `REQUIRE_DB` is set. It is off in CI for now.
 
-**Findings so far about running Pagila in CI**
-- The newest upstream Pagila does not load on `postgres:17` or `postgres:18`: its schema needs `uuidv7()` (Postgres 18) and the pgvector extension.
-- Plan: pin CI to the Pagila commit your local copy is based on, `5ba5a57` (2024-12-02), and use `postgres:17` like your compose file.
-- That pinned combination was **not yet verified**. My check was interrupted.
-- Integration tests currently skip when the database is unreachable, which would let CI pass without testing the data. Plan: add `REQUIRE_DB=1` in CI so an unreachable database fails the run. This change is in the scratch copy only, not yet in `dashboard/`.
+**Decision: CI has no database yet.** The integration tests skip themselves when Pagila is unreachable, so CI cannot fail because of the database. The cost is that a green run does not prove the SQL is right; the 7 integration tests only run locally (`make check` with the Pagila container up).
+
+**To add the database later**
+- The newest upstream Pagila does not load on `postgres:17` or `postgres:18` (it needs `uuidv7()` and pgvector).
+- Pin Pagila to `5ba5a57` (2024-12-02) and use `postgres:17`. This was checked locally: schema and data load, and the Go tests pass with `REQUIRE_DB=1`.
+- In the api job, add a Postgres service, clone Pagila at that commit, load `pagila-schema.sql` then `pagila-data.sql`, and set `TEST_DATABASE_URL` and `REQUIRE_DB=1`.
 
 **Open points**
-- `gh` is not installed. Pushing uses plain `git` over HTTPS with your keychain credentials, which I have not tested.
-- A throwaway test container, `pagila-ci-test` (port 55432), may still be running from the interrupted checks. It is separate from your `pagila` container and can be removed with `docker rm -f pagila-ci-test`.
-- Whether to commit as one commit or split backend and frontend.
+- The first CI run on GitHub has not been checked.
+- The first commit carries a `Co-Authored-By: Claude` trailer, which makes Claude show as a contributor. Removing it needs an amend and force-push, not done yet.
 
 ---
 
 ## 6. Next steps, in order
 
-1. Finish section 5: verify the pinned Pagila loads, add the CI workflow, push, get CI green.
+1. Check the first CI run on GitHub and fix what fails.
 2. Phase 2: write requirements and acceptance criteria for the Rentals Explorer, plan, then build.
-3. Microservices phase: split the packages into binaries, add a gateway, then split databases.
+3. Optional: add a Pagila database to CI (section 5).
+4. Microservices phase: split the packages into binaries, add a gateway, then split databases.

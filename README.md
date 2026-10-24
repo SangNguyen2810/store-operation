@@ -1,12 +1,12 @@
 # Store Operations Dashboard
 
-A staff dashboard over the [Pagila](../README.md) DVD-rental database: KPIs with period-over-period deltas, revenue by store over time, and top films. Go API, React frontend.
+A staff dashboard over the [Pagila](https://github.com/devrimgunduz/pagila) DVD-rental database: KPIs with period-over-period deltas, revenue by store over time, and top films. Go API, React frontend.
 
 The dashboard only **reads** Pagila. It adds no tables, views, indexes or migrations, and its connections are opened with `default_transaction_read_only=on`.
 
 ## Run it
 
-Needs Go, Node 22+, and the Pagila container from the repo root running (`docker compose up -d pagila`).
+Needs Go, Node 22+, and a Pagila database on `localhost:5432` (run it from the [Pagila repo](https://github.com/devrimgunduz/pagila) with `docker compose up -d pagila`).
 
 ```sh
 make install   # npm install
@@ -16,6 +16,12 @@ make dev       # API on :8080, web on :5173
 Open http://localhost:5173. `make check` runs lint, typecheck, all tests and the production build.
 
 Configuration is by environment variable; see [.env.example](.env.example). Pagila's payments end on 2022-07-27, so "today" is pinned with `ASOF_DATE` and the UI reads it from `GET /api/meta`.
+
+## CI
+
+GitHub Actions ([ci.yml](.github/workflows/ci.yml)) runs on pushes to `main` and on pull requests. The `api` job checks `gofmt`, runs `go vet`, `go test` and `go build`; the `web` job runs `npm ci`, lint, typecheck, tests and build.
+
+CI has no database yet, so the Pagila integration tests skip there and only run locally. Set `REQUIRE_DB=1` to make them fail instead of skip once a database is added.
 
 ## API
 

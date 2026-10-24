@@ -10,11 +10,12 @@ import (
 	"syscall"
 	"time"
 
+	httpadapter "github.com/SangNguyen2810/store-operation/api/internal/analytics/adapters/http"
 	"github.com/SangNguyen2810/store-operation/api/internal/analytics/adapters/postgres"
 	"github.com/SangNguyen2810/store-operation/api/internal/analytics/app"
-	"github.com/SangNguyen2810/store-operation/api/internal/config"
-	"github.com/SangNguyen2810/store-operation/api/internal/db"
-	"github.com/SangNguyen2810/store-operation/api/internal/httpapi"
+	"github.com/SangNguyen2810/store-operation/api/internal/platform/config"
+	"github.com/SangNguyen2810/store-operation/api/internal/platform/db"
+	"github.com/SangNguyen2810/store-operation/api/internal/platform/httpx"
 )
 
 func main() {
@@ -38,10 +39,14 @@ func run() error {
 	}
 	defer pool.Close()
 
-	svc := app.NewService(postgres.New(pool))
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", httpx.Health(pool))
+	mux.HandleFunc("GET /api/meta", httpx.Meta(cfg.AsOf))
+	httpadapter.Register(mux, app.NewService(postgres.New(pool)), cfg.AsOf)
+
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(svc, pool, cfg.AsOf),
+		Handler:           httpx.LogRequests(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      15 * time.Second,
 	}

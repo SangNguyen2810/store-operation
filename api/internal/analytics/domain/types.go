@@ -22,8 +22,8 @@ const (
 func (g Granularity) Valid() bool { return g == Day || g == Week || g == Month }
 
 type Store struct {
-	ID    int    `json:"id"`
-	Label string `json:"label"`
+	ID    int
+	Label string
 }
 
 // Totals are the raw figures for one window.
@@ -37,27 +37,27 @@ type Totals struct {
 // Metric is a value with the same figure for the preceding window.
 // DeltaPct is nil when there is no previous value to compare against.
 type Metric struct {
-	Value    float64  `json:"value"`
-	Previous float64  `json:"previous"`
-	DeltaPct *float64 `json:"deltaPct"`
+	Value    float64
+	Previous float64
+	DeltaPct *float64
 }
 
 type KPIs struct {
-	Revenue         Metric `json:"revenue"`
-	Rentals         Metric `json:"rentals"`
-	ActiveCustomers Metric `json:"activeCustomers"`
-	AvgPayment      Metric `json:"avgPayment"`
+	Revenue         Metric
+	Rentals         Metric
+	ActiveCustomers Metric
+	AvgPayment      Metric
 }
 
 type RevenuePoint struct {
-	Bucket  string  `json:"bucket"` // YYYY-MM-DD, start of the bucket
-	StoreID int     `json:"storeId"`
-	Revenue float64 `json:"revenue"`
+	Bucket  string // YYYY-MM-DD, start of the bucket
+	StoreID int
+	Revenue float64
 }
 
 type FilmStat struct {
-	FilmID  int     `json:"filmId"`
-	Title   string  `json:"title"`
-	Rentals int     `json:"rentals"`
-	Revenue float64 `json:"revenue"`
+	FilmID  int
+	Title   string
+	Rentals int
+	Revenue float64
 }

@@ -11,7 +11,7 @@ import (
 
 	"github.com/SangNguyen2810/store-operation/api/internal/analytics/adapters/postgres"
 	"github.com/SangNguyen2810/store-operation/api/internal/analytics/domain"
-	"github.com/SangNguyen2810/store-operation/api/internal/db"
+	"github.com/SangNguyen2810/store-operation/api/internal/platform/db"
 )
 
 // These tests read the live Pagila database (read-only) and skip when it is unreachable (fail if REQUIRE_DB is set, as in CI).

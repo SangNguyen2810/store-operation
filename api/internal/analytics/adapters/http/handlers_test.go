@@ -1,4 +1,4 @@
-package httpapi
+package httpadapter
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/SangNguyen2810/store-operation/api/internal/analytics/domain"
+	"github.com/SangNguyen2810/store-operation/api/internal/platform/httpx"
 )
 
 type fakeSvc struct {
@@ -36,22 +37,24 @@ func (f *fakeSvc) TopFilms(_ context.Context, fl domain.Filter, n int) ([]domain
 	return []domain.FilmStat{}, f.err
 }
 
-type fakeDB struct{ err error }
-
-func (f fakeDB) Ping(context.Context) error { return f.err }
+func handler(svc Analytics) http.Handler {
+	mux := http.NewServeMux()
+	Register(mux, svc, asOf)
+	return mux
+}
 
 var asOf = time.Date(2022, 7, 27, 0, 0, 0, 0, time.UTC)
 
-func do(t *testing.T, svc *fakeSvc, db fakeDB, target string) *httptest.ResponseRecorder {
+func do(t *testing.T, svc *fakeSvc, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	New(svc, db, asOf).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+	handler(svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
 	return rec
 }
 
 func TestDefaults(t *testing.T) {
 	svc := &fakeSvc{}
-	rec := do(t, svc, fakeDB{}, "/api/revenue")
+	rec := do(t, svc, "/api/revenue")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
@@ -65,14 +68,14 @@ func TestDefaults(t *testing.T) {
 
 func TestParamsPassedThrough(t *testing.T) {
 	svc := &fakeSvc{}
-	rec := do(t, svc, fakeDB{}, "/api/revenue?from=2022-03-01&to=2022-03-31&store=2&granularity=week")
+	rec := do(t, svc, "/api/revenue?from=2022-03-01&to=2022-03-31&store=2&granularity=week")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
 	if svc.filter.StoreID == nil || *svc.filter.StoreID != 2 || svc.gran != domain.Week {
 		t.Errorf("got %+v gran=%s", svc.filter, svc.gran)
 	}
-	do(t, svc, fakeDB{}, "/api/top/films?limit=3")
+	do(t, svc, "/api/top/films?limit=3")
 	if svc.limit != 3 {
 		t.Errorf("limit = %d, want 3", svc.limit)
 	}
@@ -80,7 +83,7 @@ func TestParamsPassedThrough(t *testing.T) {
 
 func TestOnlyToGivenDefaultsFrom(t *testing.T) {
 	svc := &fakeSvc{}
-	do(t, svc, fakeDB{}, "/api/kpis?to=2022-03-31")
+	do(t, svc, "/api/kpis?to=2022-03-31")
 	if got := svc.filter.From.Format("2006-01-02"); got != "2022-03-02" {
 		t.Errorf("from = %s, want 2022-03-02", got)
 	}
@@ -101,14 +104,14 @@ func TestBadRequests(t *testing.T) {
 	}
 	for name, target := range cases {
 		t.Run(name, func(t *testing.T) {
-			rec := do(t, &fakeSvc{}, fakeDB{}, target)
+			rec := do(t, &fakeSvc{}, target)
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status %d, want 400", rec.Code)
 			}
 			if ct := rec.Header().Get("Content-Type"); ct != "application/problem+json" {
 				t.Errorf("content-type %q", ct)
 			}
-			var p problem
+			var p httpx.Problem
 			if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil || p.Status != 400 || p.Detail == "" {
 				t.Errorf("bad problem body: %s", rec.Body)
 			}
@@ -117,7 +120,7 @@ func TestBadRequests(t *testing.T) {
 }
 
 func TestServiceErrorHidesDetail(t *testing.T) {
-	rec := do(t, &fakeSvc{err: errors.New("secret sql failure")}, fakeDB{}, "/api/kpis")
+	rec := do(t, &fakeSvc{err: errors.New("secret sql failure")}, "/api/kpis")
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status %d, want 500", rec.Code)
 	}
@@ -126,26 +129,10 @@ func TestServiceErrorHidesDetail(t *testing.T) {
 	}
 }
 
-func TestHealth(t *testing.T) {
-	if rec := do(t, &fakeSvc{}, fakeDB{}, "/healthz"); rec.Code != http.StatusOK {
-		t.Errorf("healthy: %d", rec.Code)
-	}
-	if rec := do(t, &fakeSvc{}, fakeDB{err: errors.New("down")}, "/healthz"); rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("unhealthy: %d", rec.Code)
-	}
-}
-
 func TestMethodNotAllowed(t *testing.T) {
 	rec := httptest.NewRecorder()
-	New(&fakeSvc{}, fakeDB{}, asOf).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/kpis", nil))
+	handler(&fakeSvc{}).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/kpis", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status %d, want 405", rec.Code)
-	}
-}
-
-func TestMeta(t *testing.T) {
-	rec := do(t, &fakeSvc{}, fakeDB{}, "/api/meta")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"asOf":"2022-07-27"`) {
-		t.Errorf("status %d body %s", rec.Code, rec.Body)
 	}
 }

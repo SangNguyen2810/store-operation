@@ -1,4 +1,4 @@
-package httpapi
+package httpadapter
 
 import (
 	"errors"

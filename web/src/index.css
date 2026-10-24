@@ -98,7 +98,7 @@ button[aria-pressed='true'] { background: var(--accent); border-color: var(--acc
 
 .field { display: grid; gap: 6px; min-width: 0; }
 .field-label { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
-.range-label { display: none; }
+.segmented-label { display: none; }
 .field select, .field input { width: 100%; min-width: 0; }
 
 .segmented { display: inline-flex; border-radius: var(--radius); overflow: hidden; background: var(--surface); outline: 1px solid var(--border); outline-offset: -1px; }
@@ -112,20 +112,20 @@ button[aria-pressed='true'] { background: var(--accent); border-color: var(--acc
 
 .filter-fields { display: none; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .filter-fields[data-open='true'] { display: grid; }
-.field-store { grid-column: 1 / -1; }
+.field-wide { grid-column: 1 / -1; }
 .reset { grid-column: 1 / -1; justify-self: start; border-color: transparent; background: none; color: var(--accent); text-decoration: underline; padding-inline: 0; }
 
 /* Tablet: fields always visible, two per row. */
 @media (min-width: 640px) {
   .filters-toggle { display: none; }
   .filter-fields { display: grid; }
-  .field-store { grid-column: auto; }
+  .field-wide { grid-column: auto; }
 }
 
 /* Desktop: one aligned row, every control the same height. */
 @media (min-width: 1024px) {
   .filters { grid-template-columns: auto minmax(0, 1fr); align-items: end; gap: 16px 24px; }
-  .range-label { display: block; }
+  .segmented-label { display: block; }
   .filter-fields { grid-template-columns: minmax(9.5rem, 1fr) minmax(9.5rem, 1fr) minmax(0, 1.8fr) minmax(7rem, 1fr) auto; align-items: end; }
   .reset { grid-column: auto; justify-self: end; }
 }
@@ -156,15 +156,15 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--bord
 thead th { color: var(--muted); font-size: 0.8rem; }
 @media (min-width: 640px) { th, td { padding: 6px 10px; } }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
-.top-films tbody th { position: relative; }
-/* Small screens: rentals move under the title so the film name keeps its width. */
-.film-meta { display: block; font-size: 0.75rem; color: var(--muted); }
-.col-rentals { display: none; }
+.ranked-table tbody th { position: relative; }
+/* Small screens: collapsible columns hide and their content moves under the label. */
+.ranked-meta { display: block; font-size: 0.75rem; color: var(--muted); }
+.col-collapsible { display: none; }
 @media (min-width: 640px) {
-  .film-meta { display: none; }
-  .col-rentals { display: table-cell; }
+  .ranked-meta { display: none; }
+  .col-collapsible { display: table-cell; }
 }
-.bar { display: block; height: 3px; margin-top: 4px; background: var(--series-1); border-radius: 2px; opacity: 0.6; }
+.ranked-bar { display: block; height: 3px; margin-top: 4px; background: var(--series-1); border-radius: 2px; opacity: 0.6; }
 
 .skeleton { background: var(--skeleton); border-radius: 6px; animation: pulse 1.4s ease-in-out infinite; }
 .stack { display: grid; gap: 10px; }

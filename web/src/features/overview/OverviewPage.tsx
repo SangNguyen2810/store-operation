@@ -1,11 +1,13 @@
 import { AsyncSection } from '../../components/AsyncSection'
 import { ErrorState } from '../../components/ErrorState'
+import { KpiGrid, KpiGridSkeleton } from '../../components/KpiGrid'
 import { PageHeader } from '../../components/PageHeader'
+import { RankedTable, RankedTableSkeleton } from '../../components/RankedTable'
 import { Skeleton } from '../../components/Skeleton'
 import { Suspense, lazy } from 'react'
-import { FilterBar } from './FilterBar'
-import { KpiCards, KpiSkeleton } from './KpiCards'
-import { TopFilms, TopFilmsSkeleton } from './TopFilms'
+import { OverviewFilters } from './OverviewFilters'
+import { FILM_COLUMNS, toFilmRows } from './films'
+import { toKpiItems } from './kpis'
 import { useFilters, useKpis, useMeta, useRevenue, useStores, useTopFilms } from '../../hooks'
 import { formatBucket } from '../../lib/format'
 
@@ -32,10 +34,10 @@ function Dashboard({ asOf }: { asOf: string }) {
     <>
       <PageHeader title="Store Operations" subtitle={<>Data as of {formatBucket(asOf)}, {asOf.slice(0, 4)}</>} />
 
-      <FilterBar filters={filters} asOf={asOf} stores={stores.data ?? []} onChange={setFilters} />
+      <OverviewFilters filters={filters} asOf={asOf} stores={stores.data ?? []} onChange={setFilters} />
 
-      <AsyncSection title="Key figures" query={kpis} skeleton={<KpiSkeleton />}>
-        {(data) => <KpiCards kpis={data} />}
+      <AsyncSection title="Key figures" query={kpis} skeleton={<KpiGridSkeleton />}>
+        {(data) => <KpiGrid items={toKpiItems(data)} />}
       </AsyncSection>
 
       <div className="split">
@@ -52,8 +54,8 @@ function Dashboard({ asOf }: { asOf: string }) {
           )}
         </AsyncSection>
 
-        <AsyncSection title="Top films" query={films} isEmpty={(f) => f.length === 0} skeleton={<TopFilmsSkeleton />}>
-          {(data) => <TopFilms films={data} />}
+        <AsyncSection title="Top films" query={films} isEmpty={(f) => f.length === 0} skeleton={<RankedTableSkeleton />}>
+          {(data) => <RankedTable labelHeader="Film" columns={FILM_COLUMNS} rows={toFilmRows(data)} />}
         </AsyncSection>
       </div>
     </>

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { FilterBar } from './FilterBar'
+import { OverviewFilters } from './OverviewFilters'
 import { defaultFilters } from '../../lib/filters'
 
 const ASOF = '2022-07-27'
@@ -12,11 +12,11 @@ const stores = [
 
 function setup(filters = defaultFilters(ASOF)) {
   const onChange = vi.fn()
-  render(<FilterBar filters={filters} asOf={ASOF} stores={stores} onChange={onChange} />)
+  render(<OverviewFilters filters={filters} asOf={ASOF} stores={stores} onChange={onChange} />)
   return onChange
 }
 
-describe('FilterBar', () => {
+describe('OverviewFilters', () => {
   it('marks the matching preset as pressed', () => {
     setup()
     expect(screen.getByRole('button', { name: 'Last 30 days' })).toHaveAttribute('aria-pressed', 'true')
@@ -57,12 +57,11 @@ describe('FilterBar', () => {
     setup()
     const toggle = screen.getByRole('button', { name: /^Filters/ })
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    expect(document.getElementById('filter-fields')).toHaveAttribute('data-open', 'false')
+    expect(document.getElementById(toggle.getAttribute('aria-controls')!)).toHaveAttribute('data-open', 'false')
     await userEvent.click(toggle)
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
-    expect(document.getElementById('filter-fields')).toHaveAttribute('data-open', 'true')
-    expect(toggle).toHaveAttribute('aria-controls', 'filter-fields')
-  })
+    expect(document.getElementById(toggle.getAttribute('aria-controls')!)).toHaveAttribute('data-open', 'true')
+      })
 
   it('shows no badge or reset at the defaults', () => {
     setup()
@@ -79,12 +78,12 @@ describe('FilterBar', () => {
 
   it('counts a custom date range but not a preset one', () => {
     const { unmount } = render(
-      <FilterBar filters={{ ...defaultFilters(ASOF), from: '2022-07-21' }} asOf={ASOF} stores={stores} onChange={vi.fn()} />,
+      <OverviewFilters filters={{ ...defaultFilters(ASOF), from: '2022-07-21' }} asOf={ASOF} stores={stores} onChange={vi.fn()} />,
     )
     expect(screen.queryByLabelText(/active$/)).not.toBeInTheDocument() // 7 days is a preset
     unmount()
     render(
-      <FilterBar filters={{ ...defaultFilters(ASOF), from: '2022-07-01' }} asOf={ASOF} stores={stores} onChange={vi.fn()} />,
+      <OverviewFilters filters={{ ...defaultFilters(ASOF), from: '2022-07-01' }} asOf={ASOF} stores={stores} onChange={vi.fn()} />,
     )
     expect(screen.getByLabelText('1 active')).toBeInTheDocument()
   })

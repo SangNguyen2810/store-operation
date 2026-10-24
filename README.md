@@ -88,21 +88,68 @@ curl 'http://localhost:8080/api/kpis?from=2022-06-28&to=2022-07-27'
 
 ## Architecture
 
+### System at a glance
+
+```mermaid
+flowchart LR
+    user([Staff member]) --> web
+    subgraph browser [Browser]
+        web["web<br/>React 19 · TypeScript · Vite<br/>TanStack Query"]
+    end
+    subgraph server [Go API · one deployable]
+        direction TB
+        api["cmd/api<br/>composition root"]
+        analytics["analytics context<br/>domain · app · adapters"]
+        platform["platform<br/>db · config · httpx"]
+        api --> analytics
+        api --> platform
+        analytics --> platform
+    end
+    web -- "JSON over /api/*" --> api
+    analytics -- "pgx · read-only pool" --> pg[("Pagila<br/>PostgreSQL 17")]
 ```
-┌────────────────────┐   /api/*   ┌──────────────────────────────┐        ┌────────────┐
-│  web (React 19)    │ ─────────▶ │  api (Go, net/http)          │ ─────▶ │  Pagila    │
-│  Vite, TanStack    │            │  hexagonal, one context per  │  pgx   │ PostgreSQL │
-│  Query             │ ◀───────── │  module, read-only pool      │ ◀───── │ (read-only)│
-└────────────────────┘    JSON    └──────────────────────────────┘        └────────────┘
-```
+
+**Four ideas hold the design together:**
+
+1. **Hexagonal inside, contexts outside.** Each business area is a bounded context with a pure domain, use cases that talk to ports, and adapters that plug the ports into the world.
+2. **Dependencies point inward, and a test enforces it.** Layers and contexts cannot reach around each other without failing CI.
+3. **The database is only ever read.** No tables, views, indexes or migrations are added, and the pool refuses writes.
+4. **Every screen section stands alone.** Loading, empty and error are handled per section, and filters live in the URL, so any view can be shared.
 
 ### Backend: hexagonal contexts
 
-Each business area is a **bounded context** with its own domain, use cases and adapters. Dependencies point inward only.
+```mermaid
+flowchart TB
+    subgraph ctx [internal/analytics · one bounded context]
+        direction TB
+        subgraph driving [Driving side]
+            http["adapters/http<br/>routes · validation · response types"]
+        end
+        subgraph core [Core]
+            app["app<br/>use cases · Repo port"]
+            domain["domain<br/>types · pure rules<br/>(stdlib only)"]
+        end
+        subgraph driven [Driven side]
+            pgadapter["adapters/postgres<br/>implements Repo · owns all SQL"]
+        end
+        http --> app
+        app --> domain
+        pgadapter -. "implements Repo" .-> app
+        pgadapter --> domain
+    end
+    platform["internal/platform<br/>db · config · httpx"]
+    http --> platform
+    pgadapter --> platform
+    main["cmd/api"] --> http
+    main --> pgadapter
+    main --> app
+```
+
+Solid arrows are imports and always point inward. The dotted arrow is the one place the flow of control and the import direction differ: `app` defines the `Repo` interface, and `adapters/postgres` satisfies it (dependency inversion). `cmd/api` is the only place that knows every concrete type.
 
 ```
 api/
-  cmd/api/                       composition root: wires contexts, serves HTTP
+  cmd/api/                       composition root: builds the pool, wires contexts, serves HTTP
   internal/
     analytics/                   one context
       domain/                    types and pure rules. Standard library only.
@@ -115,13 +162,18 @@ api/
     archtest/                    enforces the import rules below
 ```
 
-```
- HTTP request ─▶ adapters/http ─▶ app (use case) ─▶ domain
-                                      │
-                              Repo port (interface)
-                                      ▲
-                               adapters/postgres ─▶ Pagila
-```
+**Where does it go?**
+
+| If you are changing… | It lives in |
+|---|---|
+| A business rule (how a delta or previous window is computed) | `domain/` |
+| What the system can do (a new question it can answer) | `app/` |
+| A query, or how Pagila tables are read | `adapters/postgres/` |
+| A route, a query parameter, or the JSON shape | `adapters/http/` |
+| Timeouts, logging, error format, the DB pool | `platform/` |
+| Which pieces are wired together | `cmd/api/main.go` |
+
+**Import rules** (checked on every `go test ./...` by `internal/archtest`):
 
 | Layer | May import |
 |---|---|
@@ -130,10 +182,53 @@ api/
 | `adapters/*` | its own `domain` and `app`, `platform`, third-party. Never another adapter |
 | `platform` | no context |
 | a context | itself and `platform`, never another context |
+| `cmd` | anything (composition root) |
 
-`internal/archtest` checks these rules on every `go test ./...`, so CI fails if a layer reaches the wrong way.
+### Request lifecycle
+
+What happens on `GET /api/kpis?from=2022-06-28&to=2022-07-27&store=1`:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant W as web (TanStack Query)
+    participant H as adapters/http
+    participant A as app.Service
+    participant D as domain
+    participant P as adapters/postgres
+    participant DB as Pagila
+
+    W->>H: GET /api/kpis?from&to&store
+    H->>H: parse and validate (400 problem on bad input)
+    H->>A: KPIs(ctx, Filter)
+    A->>P: Totals(current window)
+    P->>DB: one query, read-only
+    DB-->>P: revenue, payments, rentals, customers
+    A->>D: Filter.PreviousWindow()
+    A->>P: Totals(previous window)
+    P->>DB: same query, earlier dates
+    A->>D: CompareKPIs(current, previous)
+    D-->>A: KPIs with deltas
+    A-->>H: domain.KPIs
+    H->>H: map to response type
+    H-->>W: 200 JSON
+```
+
+Errors are handled once, at the edge: bad input becomes a `400` problem body with a reason, and anything else is logged server-side and returned as a generic `500`, so internals never reach the client.
 
 ### Frontend
+
+```mermaid
+flowchart LR
+    url[("URL search params")] <--> filters["filters.ts<br/>parse · serialize"]
+    filters --> hooks["hooks.ts<br/>TanStack Query"]
+    hooks --> client["api/ client<br/>typed, one fn per endpoint"]
+    client -- "/api/*" --> backend[(Go API)]
+    hooks --> async["AsyncSection<br/>loading · empty · error + retry"]
+    async --> parts["KpiCards · RevenueChart · TopFilms"]
+    filters --> bar["FilterBar"]
+    bar -- "user changes a filter" --> url
+```
 
 ```
 web/
@@ -142,16 +237,37 @@ web/
   src/components/            AsyncSection (loading/empty/error), TimeSeriesChart
 ```
 
-### Design decisions
+| State | Owned by | Why |
+|---|---|---|
+| Filters (range, store, grouping) | The URL | Reload and share links restore the view |
+| Server data | TanStack Query | Caching, retries, request cancellation |
+| Loading, empty, error | `AsyncSection` | One component, so every section behaves the same |
+| As-of date | `GET /api/meta` | One source of truth, no duplicated constant |
 
-- **Filters live in the URL.** Only non-default values are written, so links stay short.
-- **One state component.** `AsyncSection` handles loading, empty and error (with retry) for every section. While new filters load, the previous data stays on screen, dimmed, instead of flashing a spinner.
-- **The chart library is isolated** in `TimeSeriesChart` and lazy-loaded. Swapping it touches one file, and the first load stays small.
-- **Store attribution follows the `sales_by_store` view:** `payment → rental → inventory.store_id`. Staff-based attribution does not work in this dataset.
-- **Accessible by default.** Controls are keyboard-reachable, deltas are conveyed by arrow and text rather than colour alone, and the chart has a text alternative and a table view.
-- **The API contract is separate from the domain.** Response types live in the HTTP adapter, so the domain has no `json` tags and can change without breaking clients.
-- **SQL stays in one place.** The Postgres adapter is the only code that queries these tables.
-- **Packages in one `go.mod`.** Splitting into separate Go modules only pays off once there are two or more real contexts.
+### Cross-cutting concerns
+
+| Concern | How it is handled |
+|---|---|
+| **Read-only safety** | Pool opened with `default_transaction_read_only=on`; an integration test confirms writes are rejected |
+| **Time zone** | Connections run in UTC, windows are inclusive whole days |
+| **Timeouts** | 10 s statement timeout, 5 s header read, 15 s response write, 10 s graceful shutdown |
+| **Errors** | RFC 7807-style problem bodies; internals are logged, never returned |
+| **Observability** | Structured `slog` request logs with method, path, query and duration; `/healthz` pings the database |
+| **Accessibility** | Keyboard-reachable controls, deltas shown by arrow and text (not colour alone), chart text alternative and table view |
+| **Performance** | Chart library lazy-loaded; first load is about 95 kB gzipped; previous data stays up while new filters load |
+
+### Key decisions
+
+| Decision | Alternatives considered | Why |
+|---|---|---|
+| Hexagonal layers per context | One flat package; classic handler/service/repository layers | The ports are the seams you cut along when splitting services. Extra layers would add files without adding a boundary. |
+| Packages in one `go.mod` | A `go.mod` per context with `go.work` | Separate modules only pay off with two or more real contexts. Revisit when `rentals` exists. |
+| Response types in the HTTP adapter | JSON tags on domain types | The domain can change without breaking clients, and the transport can change (for example to gRPC) without touching the domain. |
+| Layer rules enforced by a test | A convention in the docs | Rules that are not checked drift. The test needs no extra tooling. |
+| Filters in the URL | Component or global state | Shareable, reload-safe, and the browser back button works. |
+| One `AsyncSection` for query states | Per-component spinners | A failing query degrades one section, not the page. |
+| Store attribution via `payment → rental → inventory.store_id` | Via `staff.store_id` | Matches the `sales_by_store` view; staff-based attribution does not work in this dataset. |
+| Chart library isolated and lazy-loaded | Import directly where needed | Swapping the library touches one file, and the first load stays small. |
 
 ## Adding a context
 
@@ -182,6 +298,27 @@ Correctness is checked against SQL written independently of the code under test.
 > CI has no database yet, so the Pagila integration tests **skip** there and run only locally. A green CI run therefore does not prove the SQL is correct. Once a database is added to CI, set `REQUIRE_DB=1` so a missing database fails the run.
 
 ## Splitting into microservices later
+
+Today everything is one deployable. The target keeps the same contexts and swaps the in-process wiring for network calls:
+
+```mermaid
+flowchart LR
+    subgraph today [Today: one deployable]
+        direction TB
+        t_api["cmd/api"] --> t_an["analytics"]
+        t_api --> t_re["rentals (phase 2)"]
+        t_an --> t_db[("one Pagila database")]
+        t_re --> t_db
+    end
+    subgraph later [Later: one service per context]
+        direction TB
+        gw["gateway<br/>routes /api/*"] --> s_an["analytics service"]
+        gw --> s_re["rentals service"]
+        s_an --> d_an[("analytics DB")]
+        s_re --> d_re[("rentals DB")]
+    end
+    today ==> later
+```
 
 The seams are already in place:
 

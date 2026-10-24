@@ -1,5 +1,5 @@
 import { useBreakpoint } from '../../lib/useBreakpoint'
-import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from '../libs/recharts'
 
 export interface Series {
   key: string
@@ -27,7 +27,7 @@ const SIZES = {
 
 const COLORS = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)']
 
-/** The only file that knows about the chart library. Swap it here and nothing else changes. */
+/** Draws a multi-series line chart. The chart library is reached only through ../libs/recharts. */
 export function TimeSeriesChart({ rows, series, ariaLabel, formatX, formatY, formatTick = formatY }: Props) {
   const size = SIZES[useBreakpoint()]
   const tick = { fontSize: size.tick }
@@ -36,25 +36,13 @@ export function TimeSeriesChart({ rows, series, ariaLabel, formatX, formatY, for
       <div className="chart" role="img" aria-label={ariaLabel}>
         <ResponsiveContainer width="100%" height={size.height}>
           <LineChart data={rows} margin={{ top: 8, right: size.right, bottom: 0, left: size.left }}>
-            <CartesianGrid stroke="var(--grid)" vertical={false} />
-            <XAxis dataKey="x" tickFormatter={formatX} stroke="var(--muted)" tick={tick} tickMargin={8} minTickGap={32} />
-            <YAxis tickFormatter={formatTick} stroke="var(--muted)" tick={tick} width={size.yAxis} />
-            <Tooltip
-              labelFormatter={(x) => formatX(String(x))}
-              formatter={(v) => formatY(Number(v))}
-              contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
-            />
+            <CartesianGrid />
+            <XAxis dataKey="x" tickFormatter={formatX} tick={tick} />
+            <YAxis tickFormatter={formatTick} tick={tick} width={size.yAxis} />
+            <Tooltip labelFormatter={(x) => formatX(String(x))} formatter={(v) => formatY(Number(v))} />
             <Legend wrapperStyle={{ fontSize: size.tick + 1 }} />
             {series.map((s, i) => (
-              <Line
-                key={s.key}
-                dataKey={s.key}
-                name={s.label}
-                stroke={COLORS[i % COLORS.length]}
-                strokeWidth={2}
-                dot={false}
-                isAnimationActive={false}
-              />
+              <Line key={s.key} dataKey={s.key} name={s.label} stroke={COLORS[i % COLORS.length]} />
             ))}
           </LineChart>
         </ResponsiveContainer>

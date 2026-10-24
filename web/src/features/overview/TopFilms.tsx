@@ -10,7 +10,7 @@ export function TopFilms({ films }: { films: FilmStat[] }) {
         <tr>
           <th scope="col">#</th>
           <th scope="col">Film</th>
-          <th scope="col" className="num">Rentals</th>
+          <th scope="col" className="num col-rentals">Rentals</th>
           <th scope="col" className="num">Revenue</th>
         </tr>
       </thead>
@@ -20,9 +20,10 @@ export function TopFilms({ films }: { films: FilmStat[] }) {
             <td>{i + 1}</td>
             <th scope="row">
               {f.title}
+              <span className="film-meta">{formatInteger(f.rentals)} rentals</span>
               <span className="bar" style={{ width: `${(f.revenue / max) * 100}%` }} aria-hidden="true" />
             </th>
-            <td className="num">{formatInteger(f.rentals)}</td>
+            <td className="num col-rentals">{formatInteger(f.rentals)}</td>
             <td className="num">{formatCurrency(f.revenue)}</td>
           </tr>
         ))}

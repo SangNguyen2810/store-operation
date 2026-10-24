@@ -24,6 +24,7 @@ Store Operations Dashboard gives staff a single page to answer three questions: 
 - **Key figures with context.** Revenue, rentals, active customers and average payment, each compared with the previous window of the same length.
 - **Revenue by store.** One line per store, grouped by day, week or month, zero-filled so charts have no gaps. Includes a text summary and a "show data as a table" view.
 - **Top films.** Ranked by revenue, with a relative bar.
+- **Responsive.** Built mobile-first for phone, tablet and desktop, in light and dark.
 - **Shareable views.** Every filter lives in the URL. Reload or send the link and you get the same view.
 - **Resilient by design.** Each section loads, empties and fails on its own, with retry. One failing query never takes down the page.
 - **Read-only.** The app adds no tables, views, indexes or migrations. Its database connections are opened with `default_transaction_read_only=on`.
@@ -244,6 +245,24 @@ web/
 | Loading, empty, error | `AsyncSection` | One component, so every section behaves the same |
 | As-of date | `GET /api/meta` | One source of truth, no duplicated constant |
 
+### Responsive design
+
+Mobile-first CSS with two breakpoints. Anything CSS can size is sized by CSS; only the chart's pixel height and axis width, which the chart library takes as props, read the viewport (`useBreakpoint`).
+
+| | Mobile (< 640 px) | Tablet (640 to 1023 px) | Desktop (1024 px and up) |
+|---|---|---|---|
+| **Page width** | Full width, 16 px gutters | Full width, 24 px gutters | Up to 1280 px |
+| **Filters** | Presets plus a **Filters** button (shows an active count); dates, store and grouping open in place, with **Reset filters** | Presets, then fields two per row | One aligned row, every control the same height |
+| **Key figures** | 2 × 2 | 4 across | 4 across |
+| **Revenue / Top films** | Stacked, 240 px chart | Stacked, 300 px chart | Side by side (3:2), 380 px chart |
+| **Top films** | Rentals under the title | Rentals column | Rentals column |
+| **Touch targets** | 44 px | 44 px on touch, 40 px with a mouse | 40 px |
+
+- `main` is a `minmax(0, 1fr)` grid, so wide children (chart, tables) can never stretch the page past the viewport.
+- On touch screens, controls keep the 44 px target at every width (`pointer: coarse`).
+- The Filters button exposes `aria-expanded` and `aria-controls`; from 640 px up the fields are always visible and the button is hidden.
+- Verified at 375, 768 and 1280 px in light and dark: no horizontal page scroll, and every button, input and select meets the minimum height.
+
 ### Cross-cutting concerns
 
 | Concern | How it is handled |
@@ -286,7 +305,7 @@ To add one (for example `rentals`):
 | `api` HTTP adapter | Defaults, parameter passthrough, 10 bad-input cases, no leaked internals, health, 405 |
 | `api` Postgres adapter (integration) | Totals reconciled against the `sales_by_store` view and raw SQL; revenue series sums to the KPI total at every granularity; zero-fill; top films; pool rejects writes |
 | `api` architecture | Import rules between layers and contexts, plus a check that the rules catch violations |
-| `web` | URL and filter parsing, formatting, data shaping, `AsyncSection` states, KPI cards, filter bar, the page against a mocked API |
+| `web` | URL and filter parsing, formatting, data shaping, breakpoint mapping, `AsyncSection` states, KPI cards, filter bar (including the collapsible panel, active count and reset), the page against a mocked API |
 
 Correctness is checked against SQL written independently of the code under test.
 

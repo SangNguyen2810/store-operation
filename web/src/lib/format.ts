@@ -2,6 +2,9 @@ const currency = new Intl.NumberFormat('en-US', { style: 'currency', currency: '
 const integer = new Intl.NumberFormat('en-US')
 
 export const formatCurrency = (v: number) => currency.format(v)
+/** For axis ticks, where cents are noise. */
+export const formatCurrencyWhole = (v: number) => currencyWhole.format(v)
+const currencyWhole = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
 export const formatInteger = (v: number) => integer.format(v)
 
 /** "+3.2%", "-1.0%", "0.0%". */

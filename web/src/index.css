@@ -147,14 +147,23 @@ button[aria-pressed='true'] { background: var(--accent); border-color: var(--acc
 
 .chart { width: 100%; }
 .data-table { margin-top: 12px; }
-.data-table summary { cursor: pointer; color: var(--accent); }
+.data-table summary { cursor: pointer; color: var(--accent); padding-block: calc((var(--control-h) - 1.5em) / 2); }
+.data-table tbody th { white-space: nowrap; }
 .data-table table { margin-top: 8px; max-height: 280px; display: block; overflow: auto; }
 
 table { border-collapse: collapse; width: 100%; }
-th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); font-weight: 400; }
+th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); font-weight: 400; }
 thead th { color: var(--muted); font-size: 0.8rem; }
+@media (min-width: 640px) { th, td { padding: 6px 10px; } }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .top-films tbody th { position: relative; }
+/* Small screens: rentals move under the title so the film name keeps its width. */
+.film-meta { display: block; font-size: 0.75rem; color: var(--muted); }
+.col-rentals { display: none; }
+@media (min-width: 640px) {
+  .film-meta { display: none; }
+  .col-rentals { display: table-cell; }
+}
 .bar { display: block; height: 3px; margin-top: 4px; background: var(--series-1); border-radius: 2px; opacity: 0.6; }
 
 .skeleton { background: var(--skeleton); border-radius: 6px; animation: pulse 1.4s ease-in-out infinite; }

@@ -45,6 +45,7 @@ A portfolio project for a Principal Frontend Engineer interview (React/Vue role)
 - **Accessibility:** keyboard-reachable controls, deltas conveyed by arrow and text (not colour alone) with spoken labels, chart text alternative.
 - **Performance:** the chart library is lazy-loaded (first load 300 kB, 95 kB gzipped).
 - Light and dark colour tokens.
+- **Responsive:** mobile, tablet and desktop layouts (see section 6).
 
 ### Backend (phase 1): `analytics` context
 | Endpoint | Returns |
@@ -162,7 +163,25 @@ Acceptance criteria: no behavior change (met), layers hold and are enforced in C
 
 ---
 
-## 6. Done: published to GitHub with CI
+## 6. Done: responsive layout and filter redesign
+
+Requirements confirmed first: collapsible Filters panel on mobile, two-column layout on desktop, verification by screenshots at 375, 768 and 1280 px.
+
+| Phase | What | Verified |
+|---|---|---|
+| 1 | Mobile-first `index.css`; `main` as a `minmax(0, 1fr)` grid (fixes the page growing wider than the viewport on phones); 2×2 KPIs on mobile; Revenue beside Top films on desktop. | Screenshots at three widths, no horizontal overflow |
+| 2 | Filter redesign: segmented 7d/30d/90d presets, aligned fields, collapsible panel on mobile with active count and **Reset filters**, 44 px touch targets. | 4 new tests (toggle, count, reset, presets not counted); keyboard and `aria-expanded` |
+| 3 | Chart height and axis width per breakpoint (`useBreakpoint`), axis ticks without cents, Top films shows rentals under the title on mobile, data table dates no longer wrap. | Screenshots in light and dark; `make check` |
+
+Acceptance criteria: no horizontal scroll at 375, 768, 1280 px (met); mobile filters collapse with a count (met); KPIs 2×2 on mobile, 4 across from 640 px (met); desktop is about 1280 px with Revenue beside Top films (met); touch targets at least 44 px, measured in the browser (met); behavior unchanged, filters still in the URL (met, tests); keyboard and screen-reader behavior preserved (met by tests, not tried with a real screen reader).
+
+Found while reviewing the screenshots: the selected preset was white on white, and the "To" date input stuck out of the mobile card. Both fixed.
+
+Known gaps: tested in headless Chrome with touch emulation, not on real devices or other browsers; Safari date inputs and the native select look differ and were not checked.
+
+---
+
+## 7. Done: published to GitHub with CI
 
 **Repo:** https://github.com/SangNguyen2810/store-operation. Phase 1 is on `main`; the Pagila checkout and its upstream are untouched.
 
@@ -186,7 +205,7 @@ Acceptance criteria: no behavior change (met), layers hold and are enforced in C
 
 ---
 
-## 7. Next steps, in order
+## 8. Next steps, in order
 
 1. Check the first CI run on GitHub and fix what fails.
 2. Phase 2: write requirements and acceptance criteria for the Rentals Explorer, plan, then build.

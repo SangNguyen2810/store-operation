@@ -95,7 +95,7 @@ curl 'http://localhost:8080/api/kpis?from=2022-06-28&to=2022-07-27'
 flowchart LR
     user([Staff member]) --> web
     subgraph browser [Browser]
-        web["web<br/>React 19 · TypeScript · Vite<br/>TanStack Query"]
+        web["web<br/>React 19 · TypeScript · Vite<br/>Tailwind CSS · TanStack Query"]
     end
     subgraph server [Go API · one deployable]
         direction TB
@@ -242,10 +242,11 @@ web/src/
   hooks/                          useMeta, useStores, useKpis, useRevenue, useTopFilms, useFilters, queryKeys
   components/                     one folder per component: Name.tsx + index.ts + Name.test.tsx
     AsyncSection  ErrorState  PageHeader  Skeleton  TimeSeriesChart
-    KpiCard  KpiGrid  RankedTable  SegmentedControl  SelectField  DateField  FilterPanel
+    KpiCard  KpiGrid  RankedTable  Table  SegmentedControl  SelectField  DateField  Field  FilterPanel
     libs/recharts/                wrappers for the 8 chart pieces we use, with our design defaults
   api/                            typed client, one function per endpoint
   lib/                            dates, format, filters, useBreakpoint
+  index.css                       Tailwind import, colour tokens (light and dark) and a small base layer
 ```
 
 | Layer | May import |
@@ -265,9 +266,21 @@ Rules, enforced by `src/archtest.test.ts` on every `npm test`:
 - **One door to the chart library.** Everything charts need comes from `components/libs/recharts`. Each of the eight wrappers sets our theme defaults (grid and axis colours, tooltip style, 2 px lines with no dots and no animation) and lets the caller override any of them. Swapping the library is a one-folder change.
 - **One file per query.** Each react-query hook has its own file and test, and cache keys live in `queryKeys.ts`.
 
+### Styling
+
+Styling is **Tailwind CSS v4**, added through its Vite plugin (no `tailwind.config.js`, no PostCSS file). Components carry their styles as utilities next to their markup; `src/index.css` holds only the shared parts.
+
+- **Colour tokens.** The light and dark colours are CSS variables in `index.css`, and an `@theme inline` block exposes them as utilities: `bg-page`, `bg-surface`, `text-ink`, `text-muted`, `border-line`, `bg-accent`, `text-up`, `text-down`, `bg-skeleton`, `rounded-ui`. Dark mode swaps the variable values with the OS setting, so components never write `dark:` variants and the chart's `var(--series-1)` colours keep working. To add a colour, add the variable in both themes and one line in `@theme`.
+- **Base layer.** The page body, the focus ring, and one look for native buttons, inputs and selects, so a component only adds what differs.
+- **No custom class names, no `@apply`.** If a class string gets long, split out a component (as with `Field` and `Table`) instead of inventing a class.
+- **State comes from variants and attributes.** `aria-pressed:`, `aria-expanded:`, `disabled:` and `data-[open=true]:` style the state the markup already exposes.
+- **Dynamic classes need full names.** Tailwind finds classes by scanning the source, so a class built by concatenation (`` `text-${tone}` ``) is never generated. Use a lookup table of complete class names, as `KpiCard` does for the trend colours.
+- **Tests never assert utility classes.** Where a test needs a state it reads a data attribute (`data-trend`, `data-collapsible`, `data-stale`, `data-numeric`, `data-wide`, `data-open`) or an ARIA attribute, so restyling cannot break a test.
+- **Breakpoints** are Tailwind's `sm` (640 px) and `lg` (1024 px).
+
 ### Responsive design
 
-Mobile-first CSS with two breakpoints. Anything CSS can size is sized by CSS; only the chart's pixel height and axis width, which the chart library takes as props, read the viewport (`useBreakpoint`).
+Mobile-first with two breakpoints, `sm` (640 px) and `lg` (1024 px). Anything CSS can size is sized by CSS; only the chart's pixel height and axis width, which the chart library takes as props, read the viewport (`useBreakpoint`).
 
 | | Mobile (< 640 px) | Tablet (640 to 1023 px) | Desktop (1024 px and up) |
 |---|---|---|---|
@@ -306,7 +319,8 @@ Mobile-first CSS with two breakpoints. Anything CSS can size is sized by CSS; on
 | Filters in the URL | Component or global state | Shareable, reload-safe, and the browser back button works. |
 | One `AsyncSection` for query states | Per-component spinners | A failing query degrades one section, not the page. |
 | Store attribution via `payment → rental → inventory.store_id` | Via `staff.store_id` | Matches the `sales_by_store` view; staff-based attribution does not work in this dataset. |
-| Chart library isolated and lazy-loaded | Import directly where needed | Swapping the library touches one file, and the first load stays small. |
+| Chart library isolated and lazy-loaded | Import directly where needed | Swapping the library touches one folder (`components/libs/recharts`), and the first load stays small. |
+| Tailwind, with our colour variables mapped in | Hand-written CSS; Tailwind's default palette with `dark:` variants | Styles sit beside the markup and states are explicit, while the existing light and dark tokens keep dark mode automatic and the colours unchanged. |
 
 ## Adding a context
 

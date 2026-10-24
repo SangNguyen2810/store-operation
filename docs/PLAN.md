@@ -12,7 +12,7 @@ A portfolio project for a Principal Frontend Engineer interview (React/Vue role)
 - Only 1-2 core frontend features at a time.
 - Backend in Go, as simple HTTP servers. No saga, no Redis, no events. Start with one deployable and 1-2 packages, split into microservices later.
 - Pagila is **read-only**. The dashboard must never write to it, and everything lives in the `dashboard/` folder.
-- Frontend stack: React + TypeScript + Vite + TanStack Query.
+- Frontend stack: React + TypeScript + Vite + Tailwind CSS v4 + TanStack Query.
 
 ### Decisions made along the way
 
@@ -90,7 +90,7 @@ api/                                 Go, one go.mod
       config/                        environment settings
       httpx/                         JSON and problem responses, request logging, /healthz, /api/meta
     archtest/                        test that enforces the import rules below
-web/                                 React 19 + TypeScript (strict) + Vite
+web/                                 React 19 + TypeScript (strict) + Vite + Tailwind CSS v4
   src/routes.tsx                     route table: / is the dashboard, * is the 404 page
   src/pages/                         thin route-level screens (HomePage, NotFoundPage)
   src/features/overview/             container: OverviewPage calls the hooks and maps data to props (kpis.ts, films.ts, OverviewFilters)
@@ -98,6 +98,7 @@ web/                                 React 19 + TypeScript (strict) + Vite
   src/components/                    pure UI, one folder per component (tsx + index.ts + test)
   src/components/libs/recharts/      the only code that imports Recharts: 8 wrappers with our theme defaults
   src/api/  src/lib/                 typed client; dates, format, filters, useBreakpoint
+  src/index.css                      Tailwind import, colour tokens (light/dark), small base layer; no component rules
   src/archtest.test.ts               enforces the front-end import rules
 Makefile, .env.example, README.md, docs/PLAN.md, .github/workflows/ci.yml
 ```
@@ -206,7 +207,27 @@ Notes:
 
 ---
 
-## 8. Done: published to GitHub with CI
+## 8. Done: Tailwind CSS
+
+Requirements confirmed first: Tailwind v4 through the Vite plugin, the existing colour variables mapped into `@theme` (so dark mode stays automatic), and tests that read data attributes instead of utility classes.
+
+| Phase | What | Verified |
+|---|---|---|
+| 1 | Installed `tailwindcss` and `@tailwindcss/vite`; `@theme inline` maps the colour variables to utilities. Old CSS kept alongside. Tailwind's reset removes bold headings, so headings got an explicit bold. | Production screenshots pixel-identical to a fresh baseline |
+| 2 | Leaf components moved to utilities (`Skeleton`, `KpiCard`, `KpiGrid`, `PageHeader`, `ErrorState`, `AsyncSection`, `RankedTable`, chart data table, `NotFoundPage`), with a shared `Table`/`Th`/`Td`. State exposed as data attributes. | 163 tests; 10/10 pixel-identical, three runs |
+| 3 | Filters (`FilterPanel`, `SegmentedControl`, `SelectField`, `DateField`, new `Field`), page layout and the native-control base layer. `index.css` reduced to tokens and a small base layer. | 166 tests; 10/10 pixel-identical, three runs; 14 extra images (active/custom filters, enabled Reset, empty state, 404, light and dark) identical to a build of the pre-Tailwind commit |
+| 4 | README and PLAN describe the setup; final `make check`. | `make check` |
+
+Acceptance criteria: Tailwind v4 via the plugin (met); `index.css` holds only the import, theme mapping, tokens and base layer (met); no custom class names or `@apply` in components (met); dark mode follows the OS with no `dark:` prefixes (met); tests never assert utility classes, apart from one that checks a passed-in `className` comes through (met); no visible change (met, pixel-identical on the production build); CSS size reported (below).
+
+Notes:
+- **The CSS did not get smaller.** The production CSS went from 6.16 kB (2.00 kB gzipped) to 15.67 kB (4.35 kB gzipped), because Tailwind's reset and theme variables outweigh the hand-written rules they replaced. The gain is maintainability, not bundle size.
+- **Dev server screenshots flake, production ones do not.** In the Vite dev server a chart sometimes captured blank because of hot-reload CSS injection; the production build never did, so it was the reference throughout.
+- **Not covered by screenshots:** keyboard focus rings and hover. The focus rule is unchanged in the base layer, and there are no hover styles.
+
+---
+
+## 9. Done: published to GitHub with CI
 
 **Repo:** https://github.com/SangNguyen2810/store-operation. Phase 1 is on `main`; the Pagila checkout and its upstream are untouched.
 
@@ -230,7 +251,7 @@ Notes:
 
 ---
 
-## 9. Next steps, in order
+## 10. Next steps, in order
 
 1. Check the first CI run on GitHub and fix what fails.
 2. Phase 2: write requirements and acceptance criteria for the Rentals Explorer, plan, then build.

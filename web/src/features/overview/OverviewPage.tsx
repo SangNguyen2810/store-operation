@@ -44,22 +44,24 @@ function Dashboard({ asOf }: { asOf: string }) {
         {(data) => <KpiCards kpis={data} />}
       </AsyncSection>
 
-      <AsyncSection
-        title="Revenue"
-        query={revenue}
-        isEmpty={(pts) => pts.every((p) => p.revenue === 0)}
-        skeleton={<Skeleton height={300} />}
-      >
-        {(pts) => (
-          <Suspense fallback={<Skeleton height={300} />}>
-            <RevenueChart points={pts} stores={stores.data ?? []} filters={filters} />
-          </Suspense>
-        )}
-      </AsyncSection>
+      <div className="split">
+        <AsyncSection
+          title="Revenue"
+          query={revenue}
+          isEmpty={(pts) => pts.every((p) => p.revenue === 0)}
+          skeleton={<Skeleton height={300} />}
+        >
+          {(pts) => (
+            <Suspense fallback={<Skeleton height={300} />}>
+              <RevenueChart points={pts} stores={stores.data ?? []} filters={filters} />
+            </Suspense>
+          )}
+        </AsyncSection>
 
-      <AsyncSection title="Top films" query={films} isEmpty={(f) => f.length === 0} skeleton={<TopFilmsSkeleton />}>
-        {(data) => <TopFilms films={data} />}
-      </AsyncSection>
+        <AsyncSection title="Top films" query={films} isEmpty={(f) => f.length === 0} skeleton={<TopFilmsSkeleton />}>
+          {(data) => <TopFilms films={data} />}
+        </AsyncSection>
+      </div>
     </>
   )
 }

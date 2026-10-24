@@ -15,6 +15,20 @@ export function defaultFilters(asOf: string): Filters {
   return { from: addDays(asOf, -(DEFAULT_DAYS - 1)), to: asOf, store: null, granularity: 'day' }
 }
 
+/** True when the range ends at the as-of date and spans exactly one of the preset lengths. */
+function isPresetRange(f: Filters, asOf: string): boolean {
+  return f.to === asOf && PRESETS.some((p) => f.from === addDays(asOf, -(p.days - 1)))
+}
+
+/**
+ * How many filters in the collapsible panel differ from the default: a custom
+ * date range (presets are always visible), a store, or a non-default grouping.
+ */
+export function activePanelFilters(f: Filters, asOf: string): number {
+  const base = defaultFilters(asOf)
+  return (isPresetRange(f, asOf) ? 0 : 1) + (f.store !== null ? 1 : 0) + (f.granularity !== base.granularity ? 1 : 0)
+}
+
 export function presetFilters(current: Filters, asOf: string, days: number): Filters {
   return { ...current, from: addDays(asOf, -(days - 1)), to: asOf }
 }

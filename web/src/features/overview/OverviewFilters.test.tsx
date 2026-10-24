@@ -63,10 +63,10 @@ describe('OverviewFilters', () => {
     expect(document.getElementById(toggle.getAttribute('aria-controls')!)).toHaveAttribute('data-open', 'true')
       })
 
-  it('shows no badge or reset at the defaults', () => {
+  it('shows no badge, and a disabled reset, at the defaults', () => {
     setup()
     expect(screen.queryByLabelText(/active$/)).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Reset filters' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reset filters' })).toBeDisabled()
   })
 
   it('counts panel filters that differ from the default and resets them', async () => {

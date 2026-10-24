@@ -31,17 +31,23 @@ describe('FilterPanel', () => {
     expect(fields).toHaveAttribute('data-open', 'true')
   })
 
-  it('shows no count and no reset button when nothing is active', () => {
-    setup(0)
+  it('shows no count, and a disabled reset button, when nothing is active', async () => {
+    const onReset = vi.fn()
+    setup(0, onReset)
     expect(screen.queryByLabelText(/active$/)).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Reset filters' })).not.toBeInTheDocument()
+    const reset = screen.getByRole('button', { name: 'Reset filters' })
+    expect(reset).toBeDisabled()
+    await userEvent.click(reset)
+    expect(onReset).not.toHaveBeenCalled()
   })
 
   it('shows the active count and a working reset button', async () => {
     const onReset = vi.fn()
     setup(2, onReset)
     expect(screen.getByLabelText('2 active')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Reset filters' }))
+    const reset = screen.getByRole('button', { name: 'Reset filters' })
+    expect(reset).toBeEnabled()
+    await userEvent.click(reset)
     expect(onReset).toHaveBeenCalledOnce()
   })
 

@@ -114,6 +114,7 @@ button[aria-pressed='true'] { background: var(--accent); border-color: var(--acc
 .filter-fields[data-open='true'] { display: grid; }
 .field-wide { grid-column: 1 / -1; }
 .reset { grid-column: 1 / -1; justify-self: start; border-color: transparent; background: none; color: var(--accent); text-decoration: underline; padding-inline: 0; }
+.reset:disabled { color: var(--muted); text-decoration: none; cursor: not-allowed; opacity: 0.6; }
 
 /* Tablet: fields always visible, two per row. */
 @media (min-width: 640px) {

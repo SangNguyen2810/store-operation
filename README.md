@@ -272,7 +272,7 @@ Mobile-first CSS with two breakpoints. Anything CSS can size is sized by CSS; on
 | | Mobile (< 640 px) | Tablet (640 to 1023 px) | Desktop (1024 px and up) |
 |---|---|---|---|
 | **Page width** | Full width, 16 px gutters | Full width, 24 px gutters | Up to 1280 px |
-| **Filters** | Presets plus a **Filters** button (shows an active count); dates, store and grouping open in place, with **Reset filters** | Presets, then fields two per row | One aligned row, every control the same height |
+| **Filters** | Presets plus a **Filters** button (shows an active count); dates, store and grouping open in place, with **Reset filters** (always shown, disabled when nothing is active) | Presets, then fields two per row | One aligned row, every control the same height |
 | **Key figures** | 2 × 2 | 4 across | 4 across |
 | **Revenue / Top films** | Stacked, 240 px chart | Stacked, 300 px chart | Side by side (3:2), 380 px chart |
 | **Top films** | Rentals under the title | Rentals column | Rentals column |

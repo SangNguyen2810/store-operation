@@ -40,11 +40,10 @@ export function FilterPanel({ label, primary, children, activeCount, onReset }: 
 
       <div id={fieldsId} className="filter-fields" data-open={open}>
         {children}
-        {activeCount > 0 && (
-          <button type="button" className="reset" onClick={onReset}>
-            Reset filters
-          </button>
-        )}
+        {/* Always present so the layout never shifts; disabled when there is nothing to reset. */}
+        <button type="button" className="reset" onClick={onReset} disabled={activeCount === 0}>
+          Reset filters
+        </button>
       </div>
     </form>
   )

@@ -233,10 +233,14 @@ flowchart LR
 
 ```
 web/
+  src/routes.tsx             route table: "/" is the dashboard, anything else is the 404 page
+  src/pages/                 thin route-level screens (HomePage, NotFoundPage)
   src/api/                   typed client, one function per endpoint
   src/features/overview/     URL filter state, query hooks, page and its parts
   src/components/            AsyncSection (loading/empty/error), TimeSeriesChart
 ```
+
+Pages stay thin: a page picks what to show for a route, and the logic lives in `features/`. Unknown paths render `NotFoundPage` with a link back to the dashboard. Because routing happens in the browser, a production host must serve `index.html` for every path (a single-page-app rewrite), or a direct visit to `/anything` gets the host's own 404 before the app loads. Vite's dev and preview servers already do this.
 
 | State | Owned by | Why |
 |---|---|---|
@@ -305,7 +309,7 @@ To add one (for example `rentals`):
 | `api` HTTP adapter | Defaults, parameter passthrough, 10 bad-input cases, no leaked internals, health, 405 |
 | `api` Postgres adapter (integration) | Totals reconciled against the `sales_by_store` view and raw SQL; revenue series sums to the KPI total at every granularity; zero-fill; top films; pool rejects writes |
 | `api` architecture | Import rules between layers and contexts, plus a check that the rules catch violations |
-| `web` | URL and filter parsing, formatting, data shaping, breakpoint mapping, `AsyncSection` states, KPI cards, filter bar (including the collapsible panel, active count and reset), the page against a mocked API |
+| `web` | Routing (dashboard at `/`, 404 elsewhere), URL and filter parsing, formatting, data shaping, breakpoint mapping, `AsyncSection` states, KPI cards, filter bar (including the collapsible panel, active count and reset), the page against a mocked API |
 
 Correctness is checked against SQL written independently of the code under test.
 

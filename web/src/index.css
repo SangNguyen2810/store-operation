@@ -175,3 +175,11 @@ thead th { color: var(--muted); font-size: 0.8rem; }
 .state-error { border: 1px solid var(--down); }
 .state-error p { margin: 0 0 8px; }
 .state-empty { color: var(--muted); text-align: center; }
+
+.not-found { display: grid; justify-items: center; gap: 8px; padding: 48px 16px; text-align: center; }
+.not-found h1 { margin: 0; }
+.not-found-code { margin: 0; font-size: 3.5rem; font-weight: 700; line-height: 1; color: var(--muted); }
+.button-link {
+  display: inline-flex; align-items: center; min-height: var(--control-h); margin-top: 8px; padding: 0 16px;
+  border-radius: var(--radius); background: var(--accent); color: var(--bg); text-decoration: none; font-weight: 600;
+}

@@ -46,6 +46,7 @@ A portfolio project for a Principal Frontend Engineer interview (React/Vue role)
 - **Performance:** the chart library is lazy-loaded (first load 300 kB, 95 kB gzipped).
 - Light and dark colour tokens.
 - **Responsive:** mobile, tablet and desktop layouts (see section 6).
+- **Routing:** `/` is the dashboard; any other path shows a 404 page with a link home (`src/pages/`). A production host needs an SPA rewrite to `index.html`.
 
 ### Backend (phase 1): `analytics` context
 | Endpoint | Returns |
@@ -90,6 +91,8 @@ api/                                 Go, one go.mod
       httpx/                         JSON and problem responses, request logging, /healthz, /api/meta
     archtest/                        test that enforces the import rules below
 web/                                 React 19 + TypeScript (strict) + Vite
+  src/routes.tsx                     route table: / is the dashboard, * is the 404 page
+  src/pages/                         thin route-level screens (HomePage, NotFoundPage)
   src/api/                           typed client, one function per endpoint
   src/features/overview/             filters (URL state), query hooks, page and its parts
   src/components/                    AsyncSection, Skeleton, TimeSeriesChart (the only file that imports Recharts)

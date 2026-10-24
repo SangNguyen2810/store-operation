@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router-dom'
-import { OverviewPage } from './features/overview/OverviewPage'
+import { AppRoutes } from './routes'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 60_000, retry: 1, refetchOnWindowFocus: false } },
@@ -11,7 +11,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <main>
-          <OverviewPage />
+          <AppRoutes />
         </main>
       </BrowserRouter>
     </QueryClientProvider>

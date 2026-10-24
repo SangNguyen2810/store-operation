@@ -1,4 +1,5 @@
 import { Skeleton } from '../Skeleton'
+import { Table, Td, Th } from '../Table'
 
 export interface RankedColumn {
   label: string
@@ -23,46 +24,52 @@ interface Props {
   rows: RankedRow[]
 }
 
+/** Collapsible columns are hidden below 640px; `data-collapsible` marks them for tests and tooling. */
+const collapse = (c: RankedColumn) => (c.collapsible ? { 'data-collapsible': true, className: 'max-sm:hidden' } : {})
+
 /** A ranked list as a real table: numbered rows, a label with a relative bar, and right-aligned figures. */
 export function RankedTable({ labelHeader, columns, rows }: Props) {
-  const cls = (c: RankedColumn) => (c.collapsible ? 'num col-collapsible' : 'num')
   return (
-    <table className="ranked-table">
+    <Table>
       <thead>
         <tr>
-          <th scope="col">#</th>
-          <th scope="col">{labelHeader}</th>
+          <Th scope="col">#</Th>
+          <Th scope="col">{labelHeader}</Th>
           {columns.map((c) => (
-            <th key={c.label} scope="col" className={cls(c)}>
+            <Th key={c.label} scope="col" numeric {...collapse(c)}>
               {c.label}
-            </th>
+            </Th>
           ))}
         </tr>
       </thead>
       <tbody>
         {rows.map((r, i) => (
           <tr key={r.id}>
-            <td>{i + 1}</td>
-            <th scope="row">
+            <Td>{i + 1}</Td>
+            <Th scope="row" className="relative">
               {r.label}
-              {r.meta && <span className="ranked-meta">{r.meta}</span>}
-              <span className="ranked-bar" style={{ width: `${Math.max(0, Math.min(1, r.bar)) * 100}%` }} aria-hidden="true" />
-            </th>
+              {r.meta && <span className="block text-[0.75rem] text-muted sm:hidden">{r.meta}</span>}
+              <span
+                className="mt-1 block h-[3px] rounded-[2px] bg-(--series-1) opacity-60"
+                style={{ width: `${Math.max(0, Math.min(1, r.bar)) * 100}%` }}
+                aria-hidden="true"
+              />
+            </Th>
             {columns.map((c, j) => (
-              <td key={c.label} className={cls(c)}>
+              <Td key={c.label} numeric {...collapse(c)}>
                 {r.values[j]}
-              </td>
+              </Td>
             ))}
           </tr>
         ))}
       </tbody>
-    </table>
+    </Table>
   )
 }
 
 export function RankedTableSkeleton({ rows = 5 }: { rows?: number }) {
   return (
-    <div className="stack">
+    <div className="grid gap-2.5">
       {Array.from({ length: rows }, (_, i) => (
         <Skeleton key={i} height={20} />
       ))}

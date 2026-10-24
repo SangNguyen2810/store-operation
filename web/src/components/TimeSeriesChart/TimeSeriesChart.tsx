@@ -1,4 +1,5 @@
 import { useBreakpoint } from '../../lib/useBreakpoint'
+import { Table, Td, Th } from '../Table'
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from '../libs/recharts'
 
 export interface Series {
@@ -33,7 +34,7 @@ export function TimeSeriesChart({ rows, series, ariaLabel, formatX, formatY, for
   const tick = { fontSize: size.tick }
   return (
     <>
-      <div className="chart" role="img" aria-label={ariaLabel}>
+      <div className="w-full" role="img" aria-label={ariaLabel}>
         <ResponsiveContainer width="100%" height={size.height}>
           <LineChart data={rows} margin={{ top: 8, right: size.right, bottom: 0, left: size.left }}>
             <CartesianGrid />
@@ -47,30 +48,30 @@ export function TimeSeriesChart({ rows, series, ariaLabel, formatX, formatY, for
           </LineChart>
         </ResponsiveContainer>
       </div>
-      <details className="data-table">
-        <summary>Show data as a table</summary>
-        <table>
+      <details className="mt-3">
+        <summary className="cursor-pointer py-[calc((var(--control-h)-1.5em)/2)] text-accent">Show data as a table</summary>
+        <Table className="mt-2 block max-h-[280px] overflow-auto">
           <thead>
             <tr>
-              <th scope="col">Date</th>
+              <Th scope="col">Date</Th>
               {series.map((s) => (
-                <th key={s.key} scope="col">
+                <Th key={s.key} scope="col">
                   {s.label}
-                </th>
+                </Th>
               ))}
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.x}>
-                <th scope="row">{formatX(r.x)}</th>
+                <Th scope="row" className="whitespace-nowrap">{formatX(r.x)}</Th>
                 {series.map((s) => (
-                  <td key={s.key}>{formatY(Number(r[s.key]))}</td>
+                  <Td key={s.key}>{formatY(Number(r[s.key]))}</Td>
                 ))}
               </tr>
             ))}
           </tbody>
-        </table>
+        </Table>
       </details>
     </>
   )

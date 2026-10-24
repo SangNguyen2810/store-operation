@@ -45,14 +45,21 @@ export function AsyncSection<T>({ title, query, isEmpty, skeleton, children }: P
       </div>
     )
   } else if (isEmpty?.(query.data as T)) {
-    body = <p className="state state-empty">No data for this period. Try a wider date range.</p>
+    body = <p className="m-0 rounded-lg p-4 text-center text-muted">No data for this period. Try a wider date range.</p>
   } else {
     body = children(query.data as T)
   }
 
   return (
-    <section aria-labelledby={id} aria-busy={query.isFetching} className={query.isPlaceholderData ? 'stale' : undefined}>
-      <h2 id={id}>{title}</h2>
+    <section
+      aria-labelledby={id}
+      aria-busy={query.isFetching}
+      data-stale={query.isPlaceholderData}
+      className="rounded-[10px] border border-line bg-surface p-3 data-[stale=true]:opacity-60 data-[stale=true]:transition-opacity data-[stale=true]:duration-150 sm:p-4"
+    >
+      <h2 id={id} className="mb-3 text-[1.05rem] font-bold">
+        {title}
+      </h2>
       {body}
     </section>
   )

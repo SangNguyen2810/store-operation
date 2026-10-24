@@ -27,12 +27,12 @@ describe('KpiCard', () => {
   ] as const)('shows an arrow and text for a %s trend, with a spoken label', (direction, arrow) => {
     renderCard({ direction, text: '+2.4%', spokenLabel: `${direction} 2.4% versus previous period` })
     const trend = screen.getByLabelText(`${direction} 2.4% versus previous period`)
-    expect(trend).toHaveClass(`delta-${direction}`)
+    expect(trend).toHaveAttribute('data-trend', direction)
     expect(trend).toHaveTextContent(`${arrow} +2.4%`)
   })
 
   it('says there is nothing to compare when there is no trend', () => {
     renderCard(null)
-    expect(screen.getByLabelText('No previous period to compare')).toHaveClass('delta-none')
+    expect(screen.getByLabelText('No previous period to compare')).toHaveAttribute('data-trend', 'none')
   })
 })

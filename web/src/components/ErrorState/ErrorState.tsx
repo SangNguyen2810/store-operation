@@ -6,8 +6,8 @@ interface Props {
 /** A failed section or page, with a way to try again. */
 export function ErrorState({ message, onRetry }: Props) {
   return (
-    <div className="state state-error" role="alert">
-      <p>{message}</p>
+    <div className="m-0 rounded-lg border border-down p-4" role="alert">
+      <p className="mb-2">{message}</p>
       <button type="button" onClick={onRetry}>
         Retry
       </button>

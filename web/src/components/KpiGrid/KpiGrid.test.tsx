@@ -17,6 +17,6 @@ describe('KpiGrid', () => {
 
   it('renders the skeleton with the requested number of placeholders', () => {
     const { container } = render(<KpiGridSkeleton count={3} />)
-    expect(container.querySelectorAll('li.card')).toHaveLength(3)
+    expect(container.querySelectorAll('li')).toHaveLength(3)
   })
 })

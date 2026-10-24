@@ -11,6 +11,6 @@ describe('PageHeader', () => {
 
   it('omits the subtitle when there is none', () => {
     const { container } = render(<PageHeader title="Only a title" />)
-    expect(container.querySelector('.muted')).toBeNull()
+    expect(container.querySelector('p')).toBeNull()
   })
 })

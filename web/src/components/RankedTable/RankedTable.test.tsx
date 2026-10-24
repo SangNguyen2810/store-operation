@@ -23,25 +23,26 @@ describe('RankedTable', () => {
 
   it('marks collapsible columns so small screens can hide them', () => {
     render(<RankedTable labelHeader="Film" columns={columns} rows={rows} />)
-    expect(screen.getByRole('columnheader', { name: 'Rentals' })).toHaveClass('col-collapsible')
-    expect(screen.getByRole('columnheader', { name: 'Revenue' })).not.toHaveClass('col-collapsible')
+    expect(screen.getByRole('columnheader', { name: 'Rentals' })).toHaveAttribute('data-collapsible', 'true')
+    expect(screen.getAllByRole('cell', { name: '7' })[0]).toHaveAttribute('data-collapsible', 'true')
+    expect(screen.getByRole('columnheader', { name: 'Revenue' })).not.toHaveAttribute('data-collapsible')
   })
 
   it('sizes the bar relative to the largest row and clamps out-of-range values', () => {
     const { container } = render(
       <RankedTable labelHeader="Film" columns={columns} rows={[{ ...rows[0], bar: 1.4 }, { ...rows[1], bar: 0.5 }, { ...rows[1], id: 3, bar: -1 }]} />,
     )
-    const widths = [...container.querySelectorAll<HTMLElement>('.ranked-bar')].map((b) => b.style.width)
+    const widths = [...container.querySelectorAll<HTMLElement>('[aria-hidden="true"]')].map((b) => b.style.width)
     expect(widths).toEqual(['100%', '50%', '0%'])
   })
 
   it('omits the meta line when there is none', () => {
     const { container } = render(<RankedTable labelHeader="Film" columns={columns} rows={[{ ...rows[0], meta: undefined }]} />)
-    expect(container.querySelector('.ranked-meta')).toBeNull()
+    expect(container.textContent).not.toContain('rentals')
   })
 
   it('renders a skeleton with the requested number of rows', () => {
     const { container } = render(<RankedTableSkeleton rows={3} />)
-    expect(container.querySelectorAll('.skeleton')).toHaveLength(3)
+    expect(container.querySelectorAll('[aria-hidden="true"]')).toHaveLength(3)
   })
 })

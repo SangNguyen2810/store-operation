@@ -93,9 +93,12 @@ api/                                 Go, one go.mod
 web/                                 React 19 + TypeScript (strict) + Vite
   src/routes.tsx                     route table: / is the dashboard, * is the 404 page
   src/pages/                         thin route-level screens (HomePage, NotFoundPage)
-  src/api/                           typed client, one function per endpoint
-  src/features/overview/             filters (URL state), query hooks, page and its parts
-  src/components/                    AsyncSection, Skeleton, TimeSeriesChart (the only file that imports Recharts)
+  src/features/overview/             container: OverviewPage calls the hooks and maps data to props (kpis.ts, films.ts, OverviewFilters)
+  src/hooks/                         one react-query hook per file, useFilters (URL state), queryKeys
+  src/components/                    pure UI, one folder per component (tsx + index.ts + test)
+  src/components/libs/recharts/      the only code that imports Recharts: 8 wrappers with our theme defaults
+  src/api/  src/lib/                 typed client; dates, format, filters, useBreakpoint
+  src/archtest.test.ts               enforces the front-end import rules
 Makefile, .env.example, README.md, docs/PLAN.md, .github/workflows/ci.yml
 ```
 
@@ -184,7 +187,26 @@ Known gaps: tested in headless Chrome with touch emulation, not on real devices 
 
 ---
 
-## 7. Done: published to GitHub with CI
+## 7. Done: front-end structure (hooks, pure components, chart wrappers)
+
+Requirements confirmed first: generic UI primitives that take plain props, `useFilters` beside the query hooks, one small test per hook, a thin wrapper per chart piece with our defaults, and a rule that only the wrapper folder imports `recharts`.
+
+| Phase | What | Verified |
+|---|---|---|
+| 1 | `src/hooks/`: one file per query plus `useFilters` and `queryKeys`, each with a test. `filters.ts` moved to `lib/` so hooks do not import a feature. | 58 tests; screenshots pixel-identical |
+| 2 | Every shared component in its own folder (component, `index.ts`, test). Added `ErrorState` and `PageHeader`. `AsyncSection` no longer imports react-query. | 66 tests; screenshots pixel-identical |
+| 3 | Generic components (`KpiCard`, `KpiGrid`, `RankedTable`, `SegmentedControl`, `SelectField`, `DateField`, `FilterPanel`). Feature containers map domain data to props. Old `KpiCards`, `TopFilms`, `FilterBar` removed. | 98 tests; layout identical, 2,076 of about 20 million pixels differ (glyph anti-aliasing) |
+| chart | `components/libs/recharts/`: 8 wrappers with defaults, 27 tests; `TimeSeriesChart` uses only them. | Breaking each default on purpose was caught by a test (10 of 11; the 11th was a redundant default, removed). Screenshots unchanged by the wrappers. |
+| 4 | `src/archtest.test.ts` enforces the layer rules and the single recharts door; README and PLAN updated. | Planted violations are caught; `make check` |
+
+Notes:
+- The pixel differences in phase 3 come from how text is split into nodes (one string versus several), which shifts glyph edges by a pixel or so. Layout and sizes are identical.
+- The rule test reads the directory with Node at run time. An earlier version used a Vite glob, which Vite caches, so newly added files were not checked until the test file changed. Node's types (`@types/node`) were already a dev dependency, so nothing was added.
+- `minTickGap` on the X axis cannot be observed in jsdom (no text measurement), so only the screenshots cover it.
+
+---
+
+## 8. Done: published to GitHub with CI
 
 **Repo:** https://github.com/SangNguyen2810/store-operation. Phase 1 is on `main`; the Pagila checkout and its upstream are untouched.
 
@@ -208,7 +230,7 @@ Known gaps: tested in headless Chrome with touch emulation, not on real devices 
 
 ---
 
-## 8. Next steps, in order
+## 9. Next steps, in order
 
 1. Check the first CI run on GitHub and fix what fails.
 2. Phase 2: write requirements and acceptance criteria for the Rentals Explorer, plan, then build.

@@ -63,29 +63,226 @@ All settings are environment variables and all are optional. See [.env.example](
 
 Pagila's payments end on 2022-07-27, so "the last 30 days" needs a fixed anchor. The API exposes it at `GET /api/meta` and the UI reads it from there, so there is one source of truth.
 
-## API
+## API reference
 
-| Endpoint | Returns |
+A small read-only JSON API. Every endpoint is `GET`, needs no authentication, and never changes data. The examples below are real responses from the Pagila sample data (the as-of date is 2022-07-27) and run against the default `http://localhost:8080`.
+
+| Endpoint | What it returns |
 |---|---|
-| `GET /healthz` | Database ping |
-| `GET /api/meta` | `{ asOf }` |
-| `GET /api/stores` | Stores that hold inventory |
-| `GET /api/kpis` | Revenue, rentals, active customers and average payment, each with the previous window and `deltaPct` |
-| `GET /api/revenue` | One point per (bucket, store), zero-filled |
-| `GET /api/top/films` | Top films by revenue (`limit` 1-50) |
+| [`GET /healthz`](#get-healthz) | Whether the API can reach the database |
+| [`GET /api/meta`](#get-apimeta) | The dashboard's "today" |
+| [`GET /api/stores`](#get-apistores) | The stores that hold inventory |
+| [`GET /api/kpis`](#get-apikpis) | Four headline figures, each compared with the previous period |
+| [`GET /api/revenue`](#get-apirevenue) | Revenue over time, one point per bucket and store |
+| [`GET /api/top/films`](#get-apitopfilms) | The films that earned the most |
 
-**Query parameters**
+### Conventions
 
-- `from`, `to`: `YYYY-MM-DD`, inclusive, at most 366 days apart.
-- `store`: filter to one store.
-- `granularity`: `day`, `week` or `month` (`/api/revenue` only).
-- Defaults to the 30 days ending at the as-of date.
+**Date window.** `/api/kpis`, `/api/revenue` and `/api/top/films` all look at a window of whole days.
 
-Invalid input returns `400` with an RFC 7807-style problem body. Internal errors never leak details to the client.
+| Parameter | Type | Default | Rules |
+|---|---|---|---|
+| `from` | date, `YYYY-MM-DD` | 29 days before `to` | First day of the window, inclusive |
+| `to` | date, `YYYY-MM-DD` | the as-of date (`ASOF_DATE`, 2022-07-27) | Last day of the window, inclusive |
+| `store` | integer, 0 or more | all stores | Only count activity for this store |
+
+- Days are UTC and both ends are inclusive, so `from=2022-07-26&to=2022-07-27` is two days.
+- With no dates the window is the **30 days ending at the as-of date**. Give only `to` and the window is the 30 days ending there.
+- `from` must not be after `to`, and the window can be at most **366 days**.
+- The as-of date exists because Pagila's payments stop on 2022-07-27, so "the last 30 days" needs a fixed anchor. Read it from [`/api/meta`](#get-apimeta) instead of hard-coding it.
+
+**Store attribution.** Money and rentals are attributed to a store through `payment → rental → inventory.store_id`, the same rule as Pagila's `sales_by_store` view. Only stores 1 and 2 hold inventory. An unknown store id is not an error: it simply matches nothing, so figures are 0 and lists are empty.
+
+**Numbers.** Amounts are plain numbers rounded to two decimals (the web app formats them as USD). Percentages are plain numbers too, so `-2.43` means -2.43%.
+
+**Content types.** Successful responses are `application/json`. Errors from the API are `application/problem+json` (see [Errors](#errors)).
+
+### `GET /healthz`
+
+Checks that the API can reach the database. Use it for liveness and readiness probes.
+
+```sh
+curl http://localhost:8080/healthz
+```
+
+```json
+{ "status": "ok" }
+```
+
+If the database cannot be reached, the response is `503` with a [problem body](#errors) whose `detail` is `database unreachable`.
+
+### `GET /api/meta`
+
+Returns the as-of date, the dashboard's "today". The web app reads it once so the date lives in one place, set by the `ASOF_DATE` environment variable.
+
+```sh
+curl http://localhost:8080/api/meta
+```
+
+```json
+{ "asOf": "2022-07-27" }
+```
+
+### `GET /api/stores`
+
+Lists the stores that hold inventory, in id order. A store with no inventory (Pagila has 500 stores, only 2 stocked) is left out, because it would never have sales. Takes no parameters.
+
+```sh
+curl http://localhost:8080/api/stores
+```
+
+```json
+[
+  { "id": 1, "label": "Boksburg, South Africa" },
+  { "id": 2, "label": "Hamilton, New Zealand" }
+]
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | integer | Store id, the value to pass as `store` elsewhere |
+| `label` | string | `City, Country`, ready to show |
+
+### `GET /api/kpis`
+
+Four headline figures for the window, each compared with the **previous window**: the window of the same length that ends the day before this one starts. For `2022-06-28` to `2022-07-27` (30 days), the previous window is `2022-05-29` to `2022-06-27`.
+
+**Parameters:** `from`, `to`, `store` (see [Conventions](#conventions)).
 
 ```sh
 curl 'http://localhost:8080/api/kpis?from=2022-06-28&to=2022-07-27'
 ```
+
+```json
+{
+  "revenue":         { "value": 10707.22, "previous": 10973.36, "deltaPct": -2.43 },
+  "rentals":         { "value": 4158,     "previous": 2778,     "deltaPct": 49.68 },
+  "activeCustomers": { "value": 598,      "previous": 597,      "deltaPct": 0.17 },
+  "avgPayment":      { "value": 4.15,     "previous": 4.12,     "deltaPct": 0.73 }
+}
+```
+
+| Figure | How it is counted |
+|---|---|
+| `revenue` | Sum of payments made in the window |
+| `rentals` | Rentals that started in the window |
+| `activeCustomers` | Distinct customers who started a rental in the window |
+| `avgPayment` | `revenue` divided by the number of payments, or 0 when there were none |
+
+Each figure has the same three fields:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `value` | number | The figure for the requested window |
+| `previous` | number | The same figure for the previous window |
+| `deltaPct` | number or `null` | Percentage change from `previous` to `value`, to two decimals. **`null` when `previous` is 0**, because there is nothing to compare against |
+
+Filtered to one store, with `store=1`, the same window gives the store's share:
+
+```json
+{
+  "revenue":         { "value": 5434.11, "previous": 5532.99, "deltaPct": -1.79 },
+  "rentals":         { "value": 2040,    "previous": 1348,    "deltaPct": 51.34 },
+  "activeCustomers": { "value": 576,     "previous": 548,     "deltaPct": 5.11 },
+  "avgPayment":      { "value": 4.22,    "previous": 4.25,    "deltaPct": -0.71 }
+}
+```
+
+A window with no activity is not an error. Every value is 0 and every `deltaPct` is `null`.
+
+### `GET /api/revenue`
+
+Revenue over time as a flat list with **one point per time bucket and store**, ordered by bucket and then store. The list is **zero-filled**: a bucket with no sales still appears with `revenue: 0`, so a chart has no gaps to bridge.
+
+**Parameters:** `from`, `to`, `store`, and:
+
+| Parameter | Type | Default | Rules |
+|---|---|---|---|
+| `granularity` | `day`, `week` or `month` | `day` | Size of each bucket |
+
+```sh
+curl 'http://localhost:8080/api/revenue?from=2022-07-26&to=2022-07-27'
+```
+
+```json
+[
+  { "bucket": "2022-07-26", "storeId": 1, "revenue": 167.57 },
+  { "bucket": "2022-07-26", "storeId": 2, "revenue": 134.64 },
+  { "bucket": "2022-07-27", "storeId": 1, "revenue": 96.83 },
+  { "bucket": "2022-07-27", "storeId": 2, "revenue": 85.77 }
+]
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `bucket` | date, `YYYY-MM-DD` | The **first day** of the bucket |
+| `storeId` | integer | The store the revenue belongs to |
+| `revenue` | number | Payments made in the bucket |
+
+**Buckets start on calendar boundaries.** A `week` bucket starts on a Monday and a `month` bucket on the 1st, so the first bucket can start *before* `from`. Only payments inside the requested window are counted. For `from=2022-03-15&to=2022-04-10&granularity=month`:
+
+```json
+[
+  { "bucket": "2022-03-01", "storeId": 1, "revenue": 3008.99 },
+  { "bucket": "2022-03-01", "storeId": 2, "revenue": 3238.13 },
+  { "bucket": "2022-04-01", "storeId": 1, "revenue": 1795.66 },
+  { "bucket": "2022-04-01", "storeId": 2, "revenue": 1858.52 }
+]
+```
+
+With `store=2` only that store's points are returned. An unknown store gives an empty list, `[]`. At every granularity, the points add up to the same total as `revenue.value` from [`/api/kpis`](#get-apikpis) for the same window.
+
+### `GET /api/top/films`
+
+The films that earned the most in the window, highest revenue first. Ties are broken by `filmId`, so the order is stable.
+
+**Parameters:** `from`, `to`, `store`, and:
+
+| Parameter | Type | Default | Rules |
+|---|---|---|---|
+| `limit` | integer | 10 | 1 to 50 |
+
+```sh
+curl 'http://localhost:8080/api/top/films?limit=3&store=1'
+```
+
+```json
+[
+  { "filmId": 327, "title": "FOOL MOCKINGBIRD",  "rentals": 6, "revenue": 41.94 },
+  { "filmId": 879, "title": "TELEGRAPH VOYAGE",  "rentals": 5, "revenue": 38.95 },
+  { "filmId": 202, "title": "DADDY PITTSBURGH",  "rentals": 6, "revenue": 37.94 }
+]
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `filmId` | integer | Pagila's film id |
+| `title` | string | Film title (Pagila stores these in capitals) |
+| `rentals` | integer | Rentals of this film that had a payment in the window |
+| `revenue` | number | Payments for this film in the window |
+
+A window with no payments returns an empty list, `[]`.
+
+### Errors
+
+Bad input and server failures return a body in the [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807) problem style, with `Content-Type: application/problem+json`:
+
+```json
+{ "title": "Bad Request", "status": 400, "detail": "from: want YYYY-MM-DD" }
+```
+
+| Status | When | `detail` |
+|---|---|---|
+| `400` | A date is not `YYYY-MM-DD` | `from: want YYYY-MM-DD` or `to: want YYYY-MM-DD` |
+| `400` | `from` is after `to` | `from must not be after to` |
+| `400` | The window is longer than 366 days | `range must not exceed 366 days` |
+| `400` | `store` is not a non-negative integer | `store: want a non-negative integer` |
+| `400` | `granularity` is not `day`, `week` or `month` | `granularity: want day, week or month` |
+| `400` | `limit` is outside 1 to 50 | `limit: want 1..50` |
+| `500` | A query failed | `internal error`. The real cause is logged on the server and never returned |
+| `503` | `/healthz` cannot reach the database | `database unreachable` |
+
+Two cases come from Go's router, not from the API, so their bodies are plain text rather than problem JSON: `405 Method Not Allowed` for any method other than `GET` (the `Allow` header lists what is accepted), and `404 Not Found` for an unknown path.
 
 ## Architecture
 
@@ -119,34 +316,39 @@ flowchart LR
 
 ### Backend: hexagonal contexts
 
+Read this left to right. It is the path of one request, and every arrow means "calls".
+
 ```mermaid
-flowchart TB
-    subgraph ctx [internal/analytics · one bounded context]
-        direction TB
-        subgraph driving [Driving side]
-            http["adapters/http<br/>routes · validation · response types"]
-        end
-        subgraph core [Core]
-            app["app<br/>use cases · Repo port"]
-            domain["domain<br/>types · pure rules<br/>(stdlib only)"]
-        end
-        subgraph driven [Driven side]
-            pgadapter["adapters/postgres<br/>implements Repo · owns all SQL"]
-        end
-        http --> app
-        app --> domain
-        pgadapter -. "implements Repo" .-> app
-        pgadapter --> domain
+flowchart LR
+    client(["Client<br/>(the web app)"])
+
+    subgraph driving ["Driving side: starts the call"]
+        http["adapters/http<br/>routes · validation<br/>response types"]
     end
-    platform["internal/platform<br/>db · config · httpx"]
-    http --> platform
-    pgadapter --> platform
-    main["cmd/api"] --> http
-    main --> pgadapter
-    main --> app
+
+    subgraph core ["Core: the hexagon"]
+        app["app<br/>use cases"]
+        port["Repo<br/>a port: an interface<br/>defined by app"]
+    end
+
+    subgraph driven ["Driven side: gets called"]
+        pg["adapters/postgres<br/>implements Repo<br/>owns all SQL"]
+    end
+
+    db[("Pagila<br/>PostgreSQL")]
+
+    client -->|"HTTP request"| http
+    http -->|"calls a use case"| app
+    app -->|"asks for data"| port
+    port -->|"implemented by"| pg
+    pg -->|"read-only SQL"| db
 ```
 
-Solid arrows are imports and always point inward. The dotted arrow is the one place the flow of control and the import direction differ: `app` defines the `Repo` interface, and `adapters/postgres` satisfies it (dependency inversion). `cmd/api` is the only place that knows every concrete type.
+- **Driving side:** something outside pushes work in. The HTTP adapter turns a request into a use-case call, and the app never knows HTTP exists.
+- **Core:** `app` holds the use cases and defines the `Repo` interface it needs. `domain` (the types and pure rules, standard library only) is used by every box here but sits outside this flow.
+- **Driven side:** the app reaches out for data through its own interface. The Postgres adapter implements it, so the app never knows about SQL.
+
+The arrows show who **calls** whom, which is not who imports whom. `app` defines the `Repo` interface and calls it, but `app` never imports `adapters/postgres`. The adapter never imports `app` either: Go interfaces are satisfied implicitly, so it only needs methods with matching signatures, written in `domain` types. Neither side knows the other exists. That is what keeps SQL out of the core, and it is checked: the architecture test fails if `app` imports anything but `domain`. `cmd/api` is the only file that imports both sides. It builds the pieces once at startup and plugs them together, and it is not in the path of a request.
 
 ```
 api/

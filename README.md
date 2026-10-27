@@ -284,6 +284,205 @@ Bad input and server failures return a body in the [RFC 7807](https://www.rfc-ed
 
 Two cases come from Go's router, not from the API, so their bodies are plain text rather than problem JSON: `405 Method Not Allowed` for any method other than `GET` (the `Allow` header lists what is accepted), and `404 Not Found` for an unknown path.
 
+## Database
+
+The app reads the [Pagila](https://github.com/devrimgunduz/pagila) sample database (PostgreSQL 17, `public` schema) and adds nothing to it. This section documents the schema as it is, and which parts the app uses. Row counts are from the sample data.
+
+### Entity relationship diagram
+
+Solid lines are real foreign keys. Dotted lines are relationships that exist in the data but have **no foreign key constraint** (see [Things to know](#things-to-know)).
+
+```mermaid
+erDiagram
+    country ||--o{ city : "country_id"
+    city ||--o{ address : "city_id"
+    address ||--o{ store : "address_id"
+    address ||--o{ customer : "address_id"
+    address ||--o{ staff : "address_id"
+    store ||--o{ customer : "store_id"
+    store ||--o{ staff : "store_id"
+    store ||--o{ inventory : "store_id"
+    staff ||..o| store : "manager_staff_id (no FK)"
+    film ||--o{ inventory : "film_id"
+    inventory ||--o{ rental : "inventory_id"
+    customer ||--o{ rental : "customer_id"
+    staff ||--o{ rental : "staff_id"
+    rental ||..o{ payment : "rental_id (no FK)"
+    customer ||..o{ payment : "customer_id (no FK)"
+    staff ||..o{ payment : "staff_id (no FK)"
+    language ||--o{ film : "language_id"
+    language |o--o{ film : "original_language_id"
+    film ||--o{ film_actor : "film_id"
+    actor ||--o{ film_actor : "actor_id"
+    film ||--o{ film_category : "film_id"
+    category ||--o{ film_category : "category_id"
+
+    country {
+        int country_id PK
+        text country
+        timestamptz last_update
+    }
+    city {
+        int city_id PK
+        text city
+        int country_id FK
+        timestamptz last_update
+    }
+    address {
+        int address_id PK
+        text address
+        text address2
+        text district
+        int city_id FK
+        text postal_code
+        text phone
+        timestamptz last_update
+    }
+    store {
+        int store_id PK
+        int manager_staff_id
+        int address_id FK
+        timestamptz last_update
+    }
+    staff {
+        int staff_id PK
+        text first_name
+        text last_name
+        int address_id FK
+        text email
+        int store_id FK
+        boolean active
+        text username
+        text password
+        timestamptz last_update
+        bytea picture
+    }
+    customer {
+        int customer_id PK
+        int store_id FK
+        text first_name
+        text last_name
+        text email
+        int address_id FK
+        boolean activebool
+        date create_date
+        timestamptz last_update
+        int active
+    }
+    language {
+        int language_id PK
+        char name
+        timestamptz last_update
+    }
+    film {
+        int film_id PK
+        text title
+        text description
+        int release_year
+        int language_id FK
+        int original_language_id FK
+        smallint rental_duration
+        numeric rental_rate
+        smallint length
+        numeric replacement_cost
+        mpaa_rating rating
+        timestamptz last_update
+        text_array special_features
+        tsvector fulltext
+    }
+    actor {
+        int actor_id PK
+        text first_name
+        text last_name
+        timestamptz last_update
+    }
+    category {
+        int category_id PK
+        text name
+        timestamptz last_update
+    }
+    film_actor {
+        int actor_id PK
+        int film_id PK
+        timestamptz last_update
+    }
+    film_category {
+        int film_id PK
+        int category_id PK
+        timestamptz last_update
+    }
+    inventory {
+        int inventory_id PK
+        int film_id FK
+        int store_id FK
+        timestamptz last_update
+    }
+    rental {
+        int rental_id PK
+        timestamptz rental_date
+        int inventory_id FK
+        int customer_id FK
+        timestamptz return_date
+        int staff_id FK
+        timestamptz last_update
+    }
+    payment {
+        timestamptz payment_date PK
+        int payment_id PK
+        int customer_id
+        int staff_id
+        int rental_id
+        numeric amount
+    }
+```
+
+### What the app reads
+
+The API uses six tables. Everything else in Pagila is untouched.
+
+| Table | Rows | Used for |
+|---|---|---|
+| `payment` | 16,049 | Revenue, payment counts, top films. The date filter runs on `payment_date`. |
+| `rental` | 16,044 | Rental counts and distinct customers (by `rental_date`), and the link from a payment to an inventory item. |
+| `inventory` | 4,581 | The link from a rental to a **store** and a **film**. This is how money is attributed to a store. |
+| `film` | 1,000 | Film titles for top films. |
+| `store` | 500 (only 2 stocked) | The store list. |
+| `address`, `city`, `country` | 603, 600, 109 | The `City, Country` label of a store. |
+
+The remaining tables (`customer`, `staff`, `actor`, `category`, `language`, `film_actor`, `film_category`) are not queried. They are shown above so the diagram is complete, and for the planned Rentals Explorer.
+
+### How the queries join
+
+Store attribution is a fixed path, the same rule as Pagila's `sales_by_store` view:
+
+```
+payment ──rental_id──▶ rental ──inventory_id──▶ inventory ──store_id──▶ store
+                                                    └──film_id──▶ film
+```
+
+| Endpoint | Repo method | Tables read | Date column |
+|---|---|---|---|
+| `/api/stores` | `Stores` | `store`, `address`, `city`, `country`, `inventory` | none |
+| `/api/kpis` | `Totals` | `payment`, `rental`, `inventory` | `payment_date` for revenue, `rental_date` for rentals and customers |
+| `/api/revenue` | `Revenue` | `payment`, `rental`, `inventory` | `payment_date` |
+| `/api/top/films` | `TopFilms` | `payment`, `rental`, `inventory`, `film` | `payment_date` |
+
+### Partitioning and indexes
+
+- **`payment` is range-partitioned by month** on `payment_date`: `payment_p2022_01` to `payment_p2022_07`, each with its own primary key `(payment_date, payment_id)`. The queries filter on the raw `payment_date` column, so Postgres reads only the months a window touches. Wrapping that column in a function would turn off this pruning.
+- **`rental`** has `(rental_date, inventory_id, customer_id)` (unique), which serves the date filter as an index-only scan, and `(inventory_id)`.
+- **`inventory`** has `(store_id, film_id)`.
+- **`film`** has the primary key, `title`, and a GiST index on `fulltext`.
+- **`payment` has no index on `rental_id`**, so a payment-to-rental join reads the whole `rental` table and hashes it. That is the cheapest plan at this size (each endpoint runs in a few milliseconds). The app cannot add an index because it is read-only.
+
+### Things to know
+
+- **`payment` has no foreign keys** to `rental`, `customer` or `staff`, on the parent table or any partition. The relationship is by convention only, which is why the diagram draws it dotted.
+- **`store.manager_staff_id` has no foreign key**, because `staff.store_id` points back at `store` and the two would be circular.
+- **A rental can have more than one payment** (16,049 payments for 16,044 rentals). Top films therefore counts `DISTINCT rental_id` for its rentals figure.
+- **Only stores 1 and 2 hold inventory.** The other 498 stores can never have sales, so `/api/stores` leaves them out.
+- **Not part of the model:** the views (`sales_by_store`, `sales_by_film_category`, `film_list`, `customer_list`, `staff_list`, `actor_info`, `nicer_but_slower_film_list`), the materialised view `rental_by_category`, and two unrelated tables loaded alongside Pagila (`packages_apt_postgresql_org`, `packages_yum_postgresql_org`).
+
 ## Architecture
 
 ### System at a glance
@@ -348,7 +547,7 @@ flowchart LR
 - **Core:** `app` holds the use cases and defines the `Repo` interface it needs. `domain` (the types and pure rules, standard library only) is used by every box here but sits outside this flow.
 - **Driven side:** the app reaches out for data through its own interface. The Postgres adapter implements it, so the app never knows about SQL.
 
-The arrows show who **calls** whom, which is not who imports whom. `app` defines the `Repo` interface and calls it, but `app` never imports `adapters/postgres`. The adapter never imports `app` either: Go interfaces are satisfied implicitly, so it only needs methods with matching signatures, written in `domain` types. Neither side knows the other exists. That is what keeps SQL out of the core, and it is checked: the architecture test fails if `app` imports anything but `domain`. `cmd/api` is the only file that imports both sides. It builds the pieces once at startup and plugs them together, and it is not in the path of a request.
+The arrows show who **calls** whom, which is not who imports whom. `app` defines the `Repo` interface and calls it, but `app` never imports `adapters/postgres`. The adapter does not need `app` to work: Go interfaces are satisfied implicitly, so it only needs methods with matching signatures, written in `domain` types. It imports `app` for one line only, `var _ app.Repo = (*Repo)(nil)`, a compile-time check that a drifting signature fails in the adapter's own file instead of at the wiring. The dependency points inward, which is the allowed direction, and `app` knows nothing about SQL. That is what keeps SQL out of the core, and it is checked: the architecture test fails if `app` imports anything but `domain`. `cmd/api` is still the only file that wires both sides together. It builds the pieces once at startup and plugs them together, and it is not in the path of a request.
 
 ```
 api/

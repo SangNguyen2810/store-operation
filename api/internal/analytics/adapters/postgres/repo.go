@@ -9,12 +9,17 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SangNguyen2810/store-operation/api/internal/analytics/app"
 	"github.com/SangNguyen2810/store-operation/api/internal/analytics/domain"
 )
 
 // Repo reads Pagila directly. Revenue is attributed to a store through
 // payment -> rental -> inventory.store_id, the same rule as the sales_by_store view.
 type Repo struct{ pool *pgxpool.Pool }
+
+// Compile-time check that Repo satisfies the port, so a drifting signature
+// fails here rather than at the wiring in cmd/api.
+var _ app.Repo = (*Repo)(nil)
 
 func New(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
 

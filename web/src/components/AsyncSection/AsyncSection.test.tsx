@@ -37,3 +37,15 @@ describe('AsyncSection', () => {
     expect(fn).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('AsyncSection without an error message', () => {
+  it('still says what failed', () => {
+    const query = { isError: true, isPending: false, error: null, data: undefined, refetch: vi.fn() } as never
+    renderWithProviders(
+      <AsyncSection title="Things" query={query} skeleton={<p>skeleton</p>}>
+        {() => <p>never</p>}
+      </AsyncSection>,
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent("Couldn't load things: unknown error")
+  })
+})

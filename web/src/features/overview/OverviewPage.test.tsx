@@ -74,6 +74,12 @@ describe('OverviewPage', () => {
     expect(await screen.findAllByText(/no data for this period/i)).toHaveLength(2)
   })
 
+  it('still draws the chart, with generic store names, when the store list fails', async () => {
+    mockApi({ '/api/stores': () => new Response('{}', { status: 500 }) })
+    renderWithProviders(<OverviewPage />)
+    expect(await screen.findByRole('columnheader', { name: 'Store 1' }, { timeout: 3000 })).toBeInTheDocument()
+  })
+
   it('shows a per-section error and keeps the other sections working', async () => {
     mockApi({
       '/api/top/films': () => new Response(JSON.stringify({ detail: 'database unreachable' }), { status: 500 }),

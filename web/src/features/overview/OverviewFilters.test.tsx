@@ -53,6 +53,15 @@ describe('OverviewFilters', () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
+  it('accepts a valid To date and ignores one before From', () => {
+    const onChange = setup()
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '2022-07-20' } })
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ to: '2022-07-20' }))
+    onChange.mockClear()
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '2022-06-01' } })
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
   it('toggles the collapsible panel and reports its state', async () => {
     setup()
     const toggle = screen.getByRole('button', { name: /^Filters/ })

@@ -2,7 +2,7 @@
 
 A portfolio project for a Principal Frontend Engineer interview (React/Vue role), built on the Pagila DVD-rental database. It is meant to be walked through on screen as a code sample, so the plan favours clear structure and explainable trade-offs over feature count.
 
-**Status:** Phase 1 is built, verified, and published to GitHub with a CI workflow. CI has no database yet, so the integration tests skip there. Phase 2 is now an API gateway plus a Redis cache (section 10): the cache is built, the gateway is not started. The full microservices split is not started.
+**Status:** Phase 1 is built, verified, and published to GitHub with a CI workflow. Before the gateway, a testing push is under way (section 11): Go unit and integration tests are done (CI now has Pagila and Redis), and the web unit tests, coverage gate, integration tests and Playwright end-to-end tests and k6 are done. The testing push is complete. Phase 2 is now an API gateway plus a Redis cache (section 10): the cache is built, the gateway is not started. The full microservices split is not started.
 
 ---
 
@@ -238,9 +238,9 @@ Notes:
 - `.github/workflows/ci.yml` runs on pushes to `main` and on pull requests, with two jobs:
   - **api:** Go from `api/go.mod`, `gofmt`, `go vet`, `go test`, `go build`.
   - **web:** Node 22, `npm ci`, lint, typecheck, tests, build.
-- Integration tests fail instead of skipping when `REQUIRE_DB` is set. It is off in CI for now.
+- Integration tests fail instead of skipping when `REQUIRE_DB` is set. (Now set in CI, see section 11.)
 
-**Decision: CI has no database yet.** The integration tests skip themselves when Pagila is unreachable, so CI cannot fail because of the database. The cost is that a green run does not prove the SQL is right; the 7 integration tests only run locally (`make check` with the Pagila container up).
+**Original decision (superseded by section 11, Phase B): CI had no database.** The integration tests skip themselves when Pagila is unreachable, so CI cannot fail because of the database. The cost is that a green run does not prove the SQL is right; the 7 integration tests only run locally (`make check` with the Pagila container up).
 
 **To add the database later**
 - The newest upstream Pagila does not load on `postgres:17` or `postgres:18` (it needs `uuidv7()` and pgvector).
@@ -297,7 +297,7 @@ Each phase ships and is verified on its own; stop for a go-ahead after each.
 - Built: `platform/cache` (generic `Fetch`: Redis, JSON codec, TTL, `singleflight` via `DoChan`, fail-open), `analytics/adapters/cache` (thin: which methods are cached and the keys), `platform/rdb` (short timeouts, no retries; an unreachable Redis is only logged at start), `REDIS_URL` and `CACHE_TTL` config, wiring in `main.go`, `docker-compose.yml` (host port set with `REDIS_PORT`, default 6379), `make redis-up` and `make redis-down`, and architecture-test cases for the new adapter.
 - Tests: 9 in `platform/cache` and 5 in the adapter, against `miniredis`, all passing with `-race`. Three deliberate breakages (no TTL, store left out of the key, no `singleflight`) each made a test fail, in the package that owns that behaviour, then were reverted. A fourth (wrong method label in a key) survived because the films key has an extra segment, so it cannot collide: an equivalent change, not a gap. The full Go suite, `gofmt`, `go vet` and `oxlint` pass; the Postgres integration tests ran against the live Pagila container.
 - End to end, with Postgres and Redis in Docker: 11 requests (success, empty windows, unknown store, a 400) returned status and body byte-identical to an API without the cache, on both the cold and the warm call. Entries carry the 10 minute TTL. With Redis stopped, requests still return 200 with the same bodies and a warning is logged.
-- Quick timing, one run on a laptop (curl total time): top films cold 9 ms, warm about 1 ms, versus about 7 ms without the cache. Phase C repeats this properly.
+- Quick timing, one run on a laptop (curl total time): top films cold 9 ms, warm about 1 ms, versus about 7 ms without the cache. Under 20 concurrent users the gain is larger; see the Phase F result in section 11.
 - Deviations: the generic cache logic was first written inside the analytics adapter, then moved to `platform/cache` at your request (all tests and the end-to-end check were repeated after the move). `go get` first raised the module to Go 1.26; the dependencies were pinned instead (`go-redis` v9.14.0, `miniredis` v2.35.0, `x/sync` v0.17.0) so `go.mod` stays at Go 1.25.0 and CI is unaffected. Port 6379 was taken by a local `redis-server` on the machine, so the Docker host port became configurable.
 - Not done in this phase: the log line shows hit, miss or coalesced per query, but there are no counters or metrics endpoint.
 
@@ -307,9 +307,9 @@ Each phase ships and is verified on its own; stop for a go-ahead after each.
 - Verify: `go test ./...`, then through the gateway every endpoint returns the same JSON as calling analytics directly, and the web app works unchanged.
 
 **Phase C: Measure and document**
-- A small load script that compares cold and warm requests through the gateway; record the numbers in the README.
+- Point the existing k6 scripts (section 11, Phase F) at the gateway with `BASE_URL`, compare with the direct numbers, and record them in the README.
 - README: updated architecture diagram, configuration table, key decisions, and the limits (static data, one upstream). Update this plan and `.env.example`.
-- CI is unchanged: no Redis service is needed because the unit tests use `miniredis`.
+- CI already has Redis and Pagila services (section 11, Phase B); the gateway needs nothing more for its own tests.
 
 ### Acceptance criteria (draft, confirm before Phase A)
 
@@ -321,7 +321,7 @@ Each phase ships and is verified on its own; stop for a go-ahead after each.
 6. With `REDIS_URL` unset, behaviour is exactly as today.
 7. The gateway writes one access-log line per request with method, path, status, duration, client IP and request id, and passes the request id upstream.
 8. Exceeding the rate limit returns a 429 problem response with `Retry-After`; a slow upstream returns a 504 and a dead upstream a 502.
-9. The architecture test still passes, `gateway` imports only `platform`, and CI stays green with no database or Redis.
+9. The architecture test still passes, `gateway` imports only `platform`, and CI stays green.
 10. The README reports the measured cold and warm times honestly, and says the data is static.
 
 ### Risks
@@ -333,9 +333,69 @@ Each phase ships and is verified on its own; stop for a go-ahead after each.
 
 ---
 
-## 11. Next steps, in order
+## 11. In progress: tests before the gateway
 
-1. Check the first CI run on GitHub and fix what fails.
-2. Phase 2: gateway and Redis cache (section 10): confirm the acceptance criteria, then build Phase A, B, C.
-3. Optional: add a Pagila database to CI (section 9).
+**Request:** unit and integration tests for the Go API and the web app, Playwright end-to-end tests, and k6 API tests, all before the gateway. Phases A to F, one at a time.
+
+**Acceptance criteria:** Go tests pass against a real Postgres and Redis and fail in CI if either is missing; coverage floors are enforced (Go 90% domain/app, 80% elsewhere; web 85% lines); web integration tests cover filter, URL, error and retry, reset and 404; Playwright passes six scenarios on the real stack; `make k6-smoke` and `make k6-load` run with p95 under 200 ms and errors under 1%; docs updated; mutation checks reported honestly.
+
+| Phase | Scope | Status |
+|---|---|---|
+| A | Go unit tests for the gaps | Done |
+| B | Go integration tests and CI services | Done (see below) |
+| C | Web unit tests and coverage | Done (see below) |
+| D | Web integration tests (MSW) | Done (see below) |
+| E | Playwright end-to-end | Done (see below) |
+| F | k6 | Done (see below) |
+
+**Phase A result.** New tests for `domain` (20% to 100%), `app` (54.5% to 100%), the HTTP adapter (response shapes, `stores`, 500s on every endpoint), `httpx`, `config` and `rdb`. Eleven deliberate bugs were tried: ten were caught, one real survivor (a delta that ignored negative previous values) got a test and is now caught, and one control that replaced a line with itself survived as expected.
+
+**Phase B result.**
+- `internal/platform/testutil` opens Pagila and Redis for tests and skips when unreachable, or fails when `REQUIRE_DB` is set.
+- `cmd/api` now builds its handler in `newHandler`, and `cmd/api/server_integration_test.go` drives the real router, use cases and SQL over HTTP, with and without the cache, against real Pagila and Redis (10 tests). `platform/db` and `platform/cache` have their own integration tests (3 and 3).
+- `api/scripts/covergate.sh` enforces the coverage floors; `make test-api-integration` and `make cover-api` run it locally.
+- CI: Postgres 17 loaded with Pagila at `5ba5a57`, a Redis service, `REQUIRE_DB=1`, the gate and a `-race` run.
+- Verified: the whole suite passes with `-race` against a fresh `postgres:17` loaded with the pinned Pagila files (exactly the CI recipe) and the Docker Redis; unreachable services skip locally and fail with `REQUIRE_DB=1`; the gate fails when a package drops below its floor or the database is missing. Eight mutations were tried (meta route removed, wrong as-of date, cache key ignoring `to` or `limit`, value never stored, no TTL, pool not read-only, changed statement timeout): all caught, the key ones by the adapter unit tests rather than the integration tests.
+- Not verified: the workflow on GitHub itself (it cannot be run locally; the YAML parses and every step was run by hand).
+- Coverage now: domain, app, cache adapter and rdb at 100%; HTTP adapter 95.7%; httpx 95.0%; platform cache 94.7%; db 92.9%; Postgres adapter 86.2%.
+
+**Phase C result.**
+- Added `@vitest/coverage-v8`, `npm run test:coverage` and thresholds (85% lines and statements, 80% functions and branches) over all of `src` (tests, `main.tsx`, barrels and the types file excluded). CI runs it instead of plain `npm test`; `make cover-web` runs it locally.
+- Finding: the API client and date helpers were already 100% covered through the hooks, so "untested" in my earlier assessment was too strong. They now also have direct tests, because a hook test would not notice a wrong query string or a swapped error field: `api/client`, `api/analytics`, `lib/dates`, `hooks/queryKeys`, plus `useBreakpoint`, `App`, `HomePage`, `RevenueChart`, an `AsyncSection` error with no message, the `To` date field, the page with the store list failing, and `formatCurrencyWhole`.
+- Result: 40 to 47 test files, 166 to 230 tests; coverage 98.6% statements, 100% branches, 97.3% functions, 99.6% lines. The only uncovered code is the chart tooltip formatter callbacks (jsdom cannot render a recharts tooltip), which the Playwright phase will exercise.
+- Verified: `tsc -b`, `oxlint` and all tests pass; the gate fails when a threshold is raised above the real figure; thirteen deliberate bugs (query-string handling, error fields, URLs, cache keys, date maths, breakpoint logic, chart label, store list) were all caught, and a no-op control survived as expected.
+
+**Phase D result.**
+- Added `msw` (dev). `src/test/msw/handlers.ts` is a small fake of the Go API that answers by query string (figures and films depend on the store, the series follows the granularity) using the real paths and JSON field names. `server.ts` starts it per test file with `onUnhandledRequest: 'error'`, records every request, and resolves relative URLs against the page origin (Node's `fetch` cannot take them). `renderApp` mounts the real route table with a fresh query cache and a URL probe.
+- `src/integration/dashboard.integration.test.tsx`: 25 tests in groups: first load, changing a filter (store, All stores, preset, granularity, custom date, reversed range), the URL as state (shared link, five kinds of invalid parameters), browser Back, reset, errors and retry (section, KPI, page-level, failure after a filter change), empty and loading states (previous data kept and busy, last choice wins in a race), routing.
+- Result: 48 test files, 255 tests; coverage 99.0% statements, 100% branches, 97.9% functions, 99.6% lines. Three consecutive runs gave identical results (about 2 s for the group).
+- Verified: `tsc -b`, `oxlint` and all tests pass. Sixteen deliberate bugs in the app (URL writing and parsing, query keys, kept data, busy state, both Retry buttons, Reset, the 404 route, request parameters, error detail, history push versus replace) were tried: fifteen were caught at once. The sixteenth, replacing instead of pushing history entries, survived because nothing tested the Back button; a Back test now catches it.
+- Deviations: `userEvent.type` does not work on a date input in jsdom, so date tests use `fireEvent.change` like the existing filter tests. The first run captured `fetch` before MSW patched it and so hit the real network; fixed by taking it after `listen()`. One lint rule flagged `useFakeApi` as a hook, so it is `setupFakeApi`.
+- Not covered here, on purpose: real layout and the chart's drawing and tooltip (jsdom cannot), which is Phase E.
+
+**Phase E result.**
+- Added `@playwright/test` (dev; Chromium only). `web/playwright.config.ts` starts the real stack itself on ports of its own so `make dev` keeps running: `go run ./cmd/api` on `:8180` against the local Pagila, then `npm run build` and `vite preview` on `:4173`. `vite.config.ts` gained `preview.proxy` and an `API_PROXY` variable so the production build reaches that API; Vitest now only collects `src/**/*.test.*` so it never picks up the specs.
+- `web/e2e/dashboard.e2e.ts`: 11 tests. The figures are compared with what the API returns for the same window, with a guard that they are non-zero so the comparison cannot pass on an empty database. They cover the overview, store filter plus reload, presets plus real browser Back, grouping by month, Reset, 404 and the way back, an injected 503 with Retry, the chart tooltip, and three phone-width tests (folded filters and no horizontal scroll, the active-filter count, the films table losing its rentals column).
+- CI: a third job `e2e` (Postgres service, shared `load-pagila` action, Chromium, `npm run e2e`, report uploaded on failure). `make e2e-install` and `make e2e` run it locally.
+- Result: 11 passed in about 6 s, three runs in a row with identical results.
+- Verified by deliberately breaking the product: eleven bugs in the web app and the Go API (store not written to the URL, cents dropped from money, filters not folded on phones, tooltip removed, rentals column kept on phones, no 404 route, Retry doing nothing, Back not undoing filters, Reset doing nothing, the API ignoring the store filter) were tried. Ten were caught. One survived by design: the API's previous window one day short, because these specs take their expected figures from the same API, so a consistent error on both sides is invisible to them; the Go domain test catches it (`TestPreviousWindow` fails).
+- Deviations: a locator for the chart matched the legend icons too (they are images), so the chart is found by its "Revenue per…" description; and the first error test passed nothing to wait for because the app retries a failed query once, so the injected failure had to happen twice. Port 8080 was already taken by the developer's own API, which is why the stack uses `:8180`.
+- Not verified: the `e2e` job on GitHub itself (it cannot be run locally). Its steps are the ones run here, plus `playwright install --with-deps`.
+
+**Phase F result.**
+- Installed k6 v2.3.0 (`brew install k6`). `loadtest/`: `lib.js` (base URL, shared requests and shape checks), `smoke.js`, `load.js`, `compare.sh` and a short README. `make k6-smoke`, `make k6-load` and `make k6-compare` run them; `BASE_URL` points them at any API, so they can later go through the gateway; `CACHE=on|off` only tags the results.
+- Smoke: 30 checks over every endpoint, all pass, p95 about 12 ms. Load against the running API: 3,542 requests in 45 s, 0% failed, 100% of 6,831 checks passed, p95 19.5 ms overall (thresholds: 200 ms overall, 250 ms per endpoint, under 1% errors).
+- Cold versus warm (`make k6-compare`, three runs): average 7.8 to 7.9 ms without the cache and 1.7 ms with it; p95 about 20 ms against 3.5 to 3.7 ms. Recorded in the README, with the caveat that the request mix reuses a small set of filters, so it favours the cache.
+- CI: a fourth job `k6` runs the smoke script against a real API and Pagila. The load test is not run in CI because runner timings are too noisy for a latency threshold.
+- Verified by running broken APIs on their own port: a renamed JSON field, a bad granularity accepted, a 300 ms slowdown in KPIs, and one store's films failing were all caught, and the unmodified API passed as the control. One survived at first: films ranked backwards. The lowest-revenue films all tie at $0.99, so a "not increasing" check accepted a list of equal values. A second check on a wide window, where the best film clearly earns more than the fifth, now catches it.
+- Findings and fixes: the first smoke run failed because I expected a problem body for an unknown path, but the router's own 404 and 405 are plain text (documented in the README), so that check is now status only. That led me to correct an overstatement of mine from Phase B: the README said the HTTP integration test checks "400 and 404 problem bodies", but it checks the 404 status only. `compare.sh` first ran `go build` from the wrong directory. A first mutation helper had its arguments shifted and reported meaningless results; it was discarded and redone, and a pattern-based `pkill` that could have hit the developer's own API was refused, so only processes I started are signalled, by PID.
+- Not verified: the `k6` job on GitHub itself.
+
+---
+
+## 12. Next steps, in order
+
+1. Push and check the first CI run on GitHub (four jobs: api, web, e2e, k6) and fix what fails.
+2. (done) The testing work in section 11.
+3. Phase 2: gateway and Redis cache (section 10): build Phase B and C.
 4. Later: splitting the packages into binaries and databases.

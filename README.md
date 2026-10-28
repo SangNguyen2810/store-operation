@@ -44,23 +44,18 @@ Open <http://localhost:5173>.
 | Command | What it does |
 |---|---|
 | `make dev` | Runs the API and the web dev server together |
-| `make test` | Runs Go and web tests |
+| `make test` | Runs the Go and web tests (see [Testing](#testing) for all kinds of tests) |
 | `make lint` | `gofmt`, `go vet`, and `oxlint` |
 | `make typecheck` | TypeScript project build check |
 | `make build` | Builds the API binary and the production web bundle |
-| `make check` | Everything CI runs: lint, typecheck, test, build |
-| `make redis-up` / `make redis-down` | Starts or stops Redis in Docker for the optional cache (see below) |
+| `make check` | Lint, typecheck, test and build |
+| `make redis-up` / `make redis-down` | Starts or stops Redis in Docker for the optional [query cache](#query-cache) |
 
-**Optional query cache.** Start Redis, then point the API at it:
-
-```sh
-make redis-up                                     # or REDIS_PORT=6380 make redis-up if 6379 is taken
-REDIS_URL=redis://localhost:6379 make dev
-```
+**Optional query cache.** Set `REDIS_URL` to serve the heavy queries from Redis; see [Query cache](#query-cache).
 
 ### Configuration
 
-All settings are environment variables and all are optional. See [.env.example](.env.example).
+All settings are environment variables and all are optional. See [.env.example](.env.example). The variables used only by the tests are listed under [Testing](#testing).
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -69,8 +64,6 @@ All settings are environment variables and all are optional. See [.env.example](
 | `ASOF_DATE` | `2022-07-27` | The "today" for default date ranges |
 | `REDIS_URL` | *(unset)* | Turns the query cache on, for example `redis://localhost:6379`. Unset means no cache |
 | `CACHE_TTL` | `10m` | How long a cached query result stays valid |
-| `TEST_DATABASE_URL` | same as above | Database used by integration tests |
-| `REQUIRE_DB` | unset | If set, integration tests fail instead of skipping when the database is unreachable |
 
 Pagila's payments end on 2022-07-27, so "the last 30 days" needs a fixed anchor. The API exposes it at `GET /api/meta` and the UI reads it from there, so there is one source of truth.
 
@@ -764,114 +757,113 @@ Mobile-first with two breakpoints, `sm` (640 px) and `lg` (1024 px). Anything CS
 | **Accessibility** | Keyboard-reachable controls, deltas shown by arrow and text (not colour alone), chart text alternative and table view |
 | **Performance** | Chart library lazy-loaded; first load is about 95 kB gzipped; previous data stays up while new filters load |
 
-### Key decisions
+## Query cache
 
-| Decision | Alternatives considered | Why |
+The cache is optional and off by default. With it on, the three heaviest read queries (key figures, revenue and top films) are served from Redis for a while instead of being recomputed.
+
+```sh
+make redis-up                                     # or REDIS_PORT=6380 make redis-up if 6379 is taken
+REDIS_URL=redis://localhost:6379 make dev
+```
+
+- **How it behaves.** A request first looks in Redis. Within the TTL (`CACHE_TTL`, default 10 minutes) it gets the stored answer; otherwise the API queries Postgres, stores the result and returns it. Responses are byte-for-byte the same with or without the cache.
+- **Many requests at once.** Identical requests that arrive together cause a single database query.
+- **If Redis is down** the API keeps working from Postgres. Redis calls time out after 250 ms and are not retried.
+- **No invalidation.** The data is static (as of 2022-07-27), so entries just expire. With live data you would want a short TTL.
+- **What to expect.** One heavy query takes about 20 ms on this dataset, so a single user will not notice. Under load it matters more: in a local run with 20 simulated users (`make k6-compare`), the average response time dropped from about 7.9 ms to 1.7 ms and the p95 from about 20 ms to 3.6 ms. That is an indication from one laptop, not a benchmark.
+- **Logs.** With the cache on, each lookup logs a `cache` line with the outcome `hit`, `miss` or `coalesced`.
+
+## Testing
+
+There are six kinds of tests. Run the first two with nothing but Go and Node installed; the others need the services listed in the table.
+
+| Kind | What it checks | Needs | Command |
+|---|---|---|---|
+| **Go unit** | Business rules, use cases, request parsing, JSON field names, error bodies, config, the layering rules between packages | nothing | `make test-api` |
+| **Go integration** | The SQL against real Pagila (totals match the `sales_by_store` view and raw SQL), the whole HTTP stack, the pool being read-only, and the Redis cache against a real Redis | Pagila, Redis | `make test-api-integration` |
+| **Web unit and integration** | Components, hooks, URL and filter handling, the API client, and the whole app against a fake API: filters, URL, errors and Retry, Reset, browser Back, 404 | nothing | `make test-web` |
+| **End to end** | A real browser on the real stack: figures match the API, filters, Back, Reset, errors, the chart tooltip, and a phone-sized screen | Pagila, Chromium | `make e2e` |
+| **API load (k6)** | Every endpoint answers correctly and fast; response times under 20 users | Pagila, k6, a running API | `make k6-smoke`, `make k6-load` |
+| **Coverage** | The tests above leave no important code untested | as above | `make cover-api`, `make cover-web` |
+
+`make test` runs the Go and web tests together, and `make check` adds lint, typecheck and build. If Pagila or Redis is not running, the Go integration tests **skip** rather than fail.
+
+### Go tests
+
+```sh
+make test-api                                  # everything; integration tests skip if services are down
+cd api && go test ./internal/analytics/domain  # one package
+cd api && go test -run TestKPIs ./...          # tests by name
+```
+
+For the full run with real services (a missing service fails the run instead of skipping):
+
+```sh
+REDIS_PORT=6380 make redis-up                  # Redis for the tests; Pagila must be on localhost:5432
+make test-api-integration                      # real Pagila and Redis, with the race detector
+make cover-api                                 # the same, plus the coverage floors
+```
+
+The coverage floors are 90% for the `domain` and `app` packages and 80% for every other package (the `cmd/api` entry point and the test helper are not counted). A package below its floor fails the run.
+
+| Variable | Default | Purpose |
 |---|---|---|
-| Hexagonal layers per context | One flat package; classic handler/service/repository layers | The ports are the seams you cut along when splitting services. Extra layers would add files without adding a boundary. |
-| Packages in one `go.mod` | A `go.mod` per context with `go.work` | Separate modules only pay off with two or more real contexts. Revisit when a second context exists. |
-| Response types in the HTTP adapter | JSON tags on domain types | The domain can change without breaking clients, and the transport can change (for example to gRPC) without touching the domain. |
-| Layer rules enforced by a test | A convention in the docs | Rules that are not checked drift. The test needs no extra tooling. |
-| Filters in the URL | Component or global state | Shareable, reload-safe, and the browser back button works. |
-| One `AsyncSection` for query states | Per-component spinners | A failing query degrades one section, not the page. |
-| Store attribution via `payment → rental → inventory.store_id` | Via `staff.store_id` | Matches the `sales_by_store` view; staff-based attribution does not work in this dataset. |
-| Chart library isolated and lazy-loaded | Import directly where needed | Swapping the library touches one folder (`components/libs/recharts`), and the first load stays small. |
-| Cache as an adapter on the `Repo` port, mechanics in `platform/cache` | A response cache at a gateway; caching inside the Postgres adapter or the use cases | The use cases and handlers do not change, the cache is switched on in one line of `main.go`, and another context can reuse the platform part. A gateway cache would sit above the hexagon and need its own key handling. |
-| The cache fails open | Failing the request when Redis is down | The cache is an optimisation, never a reason the API is down. Redis calls have short timeouts and no retries, so a dead Redis costs milliseconds. |
-| Tailwind, with our colour variables mapped in | Hand-written CSS; Tailwind's default palette with `dark:` variants | Styles sit beside the markup and states are explicit, while the existing light and dark tokens keep dark mode automatic and the colours unchanged. |
+| `TEST_DATABASE_URL` | `postgres://postgres:123456@localhost:5432/postgres` | The Pagila the integration tests read. They never write to it |
+| `TEST_REDIS_URL` | `redis://localhost:6380/15` | The Redis for the cache tests. Database 15, so real cache keys are never touched; the tests delete the keys they create |
+| `REQUIRE_DB` | unset | If set, a missing Pagila or Redis fails the tests instead of skipping them |
 
-## Adding a context
+### Web tests
 
-To add one (here called `<context>`):
+```sh
+make test-web                                  # all unit and integration tests
+cd web && npx vitest run src/lib              # one folder
+cd web && npx vitest                          # watch mode while you work
+make cover-web                                 # tests plus the coverage floors
+```
 
-1. Create `internal/<context>/{domain,app,adapters/postgres,adapters/http}`, following `analytics`.
-2. Define the repository port in `app/ports.go` and implement it in `adapters/postgres`.
-3. Expose `Register(mux, ...)` from `adapters/http`, and call it in `cmd/api/main.go`.
-4. Run `go test ./...`. The architecture test covers the new context automatically.
-5. To cache its queries, add a thin `adapters/cache` that implements the same port and calls `platform/cache.Fetch` with its own keys, then wrap the repo in `main.go` the way analytics does.
+The integration tests (`web/src/integration`) render the real app against a fake of the API, so they need no server and no database. The coverage floors are 85% of lines and statements and 80% of functions and branches over all of `src`. `make cover-web` prints what is missing.
 
-## Testing and CI
+### End-to-end tests
 
-| Layer | Coverage |
+The end-to-end tests drive a real Chromium against the production web build, the Go API and your Pagila. They start their own API on `:8180` and the web build on `:4173`, so `make dev` can keep running.
+
+```sh
+make e2e-install        # once: downloads Chromium
+make e2e                # runs the suite (about 10 seconds)
+```
+
+```sh
+cd web
+npx playwright test -g "store filter"   # one test, by name
+npx playwright test --ui                # watch it run, step through it
+npx playwright test --headed            # show the browser
+npx playwright show-report              # open the report after a failure
+```
+
+Set `E2E_DATABASE_URL` if your Pagila is not at the default address. A failing run leaves a screenshot and a trace in `web/test-results`; open a trace with `npx playwright show-trace <file>`.
+
+### API load tests (k6)
+
+Install [k6](https://k6.io) once (`brew install k6`), and have an API running (`make dev-api` or `make dev`).
+
+```sh
+make k6-smoke                                  # one user, every endpoint, answers checked (about a second)
+make k6-load                                   # ramps to 20 users for about 45 seconds
+BASE_URL=http://localhost:9000 make k6-load    # test an API at another address
+make k6-compare                                # the same load without and with the Redis cache
+```
+
+`make k6-smoke` fails if any answer has the wrong status, content type or shape. `make k6-load` fails if the p95 response time is over 200 ms (250 ms for a single endpoint) or more than 1% of requests fail. `make k6-compare` starts two APIs of its own, so it needs Redis running (`REDIS_PORT=6380 make redis-up`) and prints a table of response times with and without the cache. More detail is in [loadtest/README.md](loadtest/README.md).
+
+### Continuous integration
+
+[ci.yml](.github/workflows/ci.yml) runs on every push to `main` and every pull request, with a real Postgres loaded with Pagila and a real Redis:
+
+| Job | Runs |
 |---|---|
-| `api` domain and app | Window and delta maths, KPI comparison with a fake `Repo` |
-| `api` HTTP adapter | Defaults, parameter passthrough, 10 bad-input cases, no leaked internals, health, 405 |
-| `api` Postgres adapter (integration) | Totals reconciled against the `sales_by_store` view and raw SQL; revenue series sums to the KPI total at every granularity; zero-fill; top films; pool rejects writes |
-| `api` platform cache | Against `miniredis`, so no Redis is needed in CI: repeat served from Redis, TTL set and expiry, separate keys, nil and empty slices preserved, concurrent cold requests load once, Redis down still serves data, errors and unreadable entries not kept, a caller hanging up does not lose the shared result |
-| `api` cache adapter | Repeats served from Redis, each KPI window cached on its own, distinct keys per window, store, granularity and limit, domain values survive the JSON round trip, `Stores` passes through |
-| `api` architecture | Import rules between layers and contexts, plus a check that the rules catch violations |
-| `web` architecture | Import rules between the layers, and that only `components/libs/recharts` imports `recharts`, with cases proving the rules catch violations |
-| `web` | Routing (dashboard at `/`, 404 elsewhere), URL and filter parsing, formatting, data shaping, breakpoint mapping, `AsyncSection` states, KPI cards, filter bar (including the collapsible panel, active count and reset), the page against a mocked API |
+| `api` | `gofmt`, `go vet`, the Go tests with the coverage floors, the Go tests again with the race detector, and a build |
+| `web` | lint, typecheck, the web tests with the coverage floors, and a build |
+| `e2e` | the Playwright suite; the report and traces are attached when it fails |
+| `k6` | the k6 smoke test against a running API |
 
-Correctness is checked against SQL written independently of the code under test.
-
-**CI** ([ci.yml](.github/workflows/ci.yml)) runs on every push to `main` and every pull request:
-
-- `api`: `gofmt`, `go vet`, `go test`, `go build`
-- `web`: `npm ci`, lint, typecheck, tests, build
-
-> CI has no database yet, so the Pagila integration tests **skip** there and run only locally. A green CI run therefore does not prove the SQL is correct. Once a database is added to CI, set `REQUIRE_DB=1` so a missing database fails the run.
-
-## Splitting into microservices later
-
-Today everything is one deployable with one context. The target keeps the contexts and swaps the in-process wiring for network calls, so any context added later becomes its own service behind the gateway:
-
-```mermaid
-flowchart LR
-    subgraph today [Today: one deployable]
-        direction TB
-        t_api["cmd/api"] --> t_an["analytics"]
-        t_an --> t_db[("one Pagila database")]
-    end
-    subgraph later [Later: one service per context]
-        direction TB
-        gw["gateway<br/>routes /api/*"] --> s_an["analytics service"]
-        gw -.-> s_next["another context's service"]
-        s_an --> d_an[("analytics DB")]
-        s_next -.-> d_next[("its own DB")]
-    end
-    today ==> later
-```
-
-The seams are already in place:
-
-1. Each context reaches its database only through its own `Repo` port and owns its SQL, and the architecture test stops one context importing another. Any future context does the same, with no cross-context queries.
-2. The HTTP adapter depends on a small `Analytics` interface, not a concrete type.
-3. To split: give each context its own `cmd/<service>` binary and its own `db.Open` pool, put a gateway in front that routes `/api/*` (the web app only talks to `/api`), then move each context's tables into its own database. Cross-service data goes behind a port: the in-process implementation is swapped for an HTTP or gRPC client, or a replicated snapshot, instead of a join.
-4. The cache moves with its context. Keys start with `analytics:v1:`, so services can share one Redis without clashing, and each service decides what to cache.
-
-## Phase 2: Redis cache (built) and gateway (planned)
-
-> **Status:** the Redis cache is built (off unless `REDIS_URL` is set), and the flow above already shows it. The gateway is **not built yet**, so the API still listens on `:8080` itself. The full plan, decisions and acceptance criteria are in [docs/PLAN.md](docs/PLAN.md#10-planned-gateway-and-redis-cache).
-
-Target shape once the gateway exists (the cache part is real today):
-
-```mermaid
-flowchart LR
-    Browser["Browser"] --> GW
-    subgraph edge ["Edge (planned): cmd/gateway, :8080"]
-        GW["routing, access log,<br/>per-IP rate limit, timeouts"]
-    end
-    GW -->|"/api/*, /healthz"| API
-    subgraph svc ["Analytics: cmd/api (:8081 behind the gateway)"]
-        API["adapters/http"] --> APP["app"]
-        APP -->|"Repo port"| CACHE["adapters/cache<br/>(cache-aside)"]
-        CACHE -->|"hit"| REDIS[("Redis")]
-        CACHE -->|"miss"| PG["adapters/postgres"]
-    end
-    PG --> DB[("Pagila")]
-```
-
-- **Cache.** A new driven adapter implements the same `Repo` port and wraps the Postgres one, so the use cases and handlers do not change. The adapter only chooses what to cache and builds the keys; the mechanics (Redis, TTL, shared lookups, failing open) live in `platform/cache`, so another context can reuse them. It checks Redis first and returns the stored value while it is within the TTL; on a miss it queries Postgres, stores the result and returns it. `Totals`, `Revenue` and `TopFilms` are cached. Concurrent identical misses cause a single query. If Redis is down, requests fall through to Postgres. With `REDIS_URL` unset there is no cache.
-- **Gateway.** A small reverse proxy on the standard library. It routes `/api/*` and `/healthz` to analytics, writes one access-log line per request with a request id (also passed upstream), rate-limits per IP with a 429 and `Retry-After`, and enforces timeouts with 502 and 504 responses. It has no auth, load balancing or TLS.
-- **Redis** runs in Docker through a `docker-compose.yml` in this repo. The apps themselves do not run in Docker.
-- **Honest note on benefit.** The heaviest queries take about 19 ms on this dataset, so the cache is not needed for speed. It is here to demonstrate the pattern. A first quick check (one run on a laptop, top films through curl) took about 9 ms cold and 1 ms warm, against about 7 ms with no cache; proper cold and warm numbers will be added here when the measuring phase is done. The data is static (as-of 2022), so there is a TTL and no invalidation; live data would need short TTLs or explicit invalidation.
-
-## Project status and roadmap
-
-- [x] **Phase 1: Overview.** KPIs, revenue by store, top films, URL filters.
-- [x] **Backend refactor.** Hexagonal contexts with enforced layer rules.
-- [ ] **Phase 2: Gateway and Redis cache.** The cache is built; the gateway and the measured results are still to do. See above and [docs/PLAN.md](docs/PLAN.md).
-- [ ] **Microservices split.** Separate binaries and then separate databases; the gateway comes first, in phase 2.
-
-See [docs/PLAN.md](docs/PLAN.md) for decisions, verification notes and known gaps.
+A missing database or Redis fails these jobs instead of skipping tests.

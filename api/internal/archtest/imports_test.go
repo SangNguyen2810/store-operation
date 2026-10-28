@@ -117,8 +117,10 @@ func TestViolationsAreDetected(t *testing.T) {
 		{"analytics/app", mod + "/internal/analytics/adapters/postgres"},
 		{"analytics/app", mod + "/internal/platform/db"},
 		{"analytics/adapters/http", mod + "/internal/analytics/adapters/postgres"},
-		{"analytics/adapters/postgres", mod + "/internal/rentals/domain"},
+		{"analytics/adapters/cache", mod + "/internal/analytics/adapters/postgres"},
+		{"analytics/adapters/postgres", mod + "/internal/othercontext/domain"},
 		{"platform/httpx", mod + "/internal/analytics/domain"},
+		{"platform/cache", mod + "/internal/analytics/domain"},
 		{"analytics/app", mod + "/cmd/api"},
 	}
 	for _, c := range bad {
@@ -134,7 +136,11 @@ func TestViolationsAreDetected(t *testing.T) {
 		{"analytics/adapters/postgres", mod + "/internal/analytics/domain"},
 		{"analytics/adapters/http", mod + "/internal/analytics/app"},
 		{"analytics/adapters/http", mod + "/internal/platform/httpx"},
+		{"analytics/adapters/cache", mod + "/internal/analytics/app"},
+		{"analytics/adapters/cache", mod + "/internal/platform/cache"},
+		{"platform/cache", "github.com/redis/go-redis/v9"},
 		{"platform/httpx", "net/http"},
+		{"platform/rdb", "github.com/redis/go-redis/v9"},
 	}
 	for _, c := range ok {
 		if why := violation(mod, c.dir, c.imp); why != "" {

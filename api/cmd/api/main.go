@@ -10,12 +10,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SangNguyen2810/store-operation/api/internal/analytics/adapters/cache"
 	httpadapter "github.com/SangNguyen2810/store-operation/api/internal/analytics/adapters/http"
 	"github.com/SangNguyen2810/store-operation/api/internal/analytics/adapters/postgres"
 	"github.com/SangNguyen2810/store-operation/api/internal/analytics/app"
+	platformcache "github.com/SangNguyen2810/store-operation/api/internal/platform/cache"
 	"github.com/SangNguyen2810/store-operation/api/internal/platform/config"
 	"github.com/SangNguyen2810/store-operation/api/internal/platform/db"
 	"github.com/SangNguyen2810/store-operation/api/internal/platform/httpx"
+	"github.com/SangNguyen2810/store-operation/api/internal/platform/rdb"
 )
 
 func main() {
@@ -39,10 +42,21 @@ func run() error {
 	}
 	defer pool.Close()
 
+	var repo app.Repo = postgres.New(pool)
+	if cfg.RedisURL != "" {
+		rc, err := rdb.Open(ctx, cfg.RedisURL)
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+		repo = cache.New(platformcache.New(rc, cfg.CacheTTL), repo)
+		slog.Info("cache enabled", "ttl", cfg.CacheTTL)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", httpx.Health(pool))
 	mux.HandleFunc("GET /api/meta", httpx.Meta(cfg.AsOf))
-	httpadapter.Register(mux, app.NewService(postgres.New(pool)), cfg.AsOf)
+	httpadapter.Register(mux, app.NewService(repo), cfg.AsOf)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

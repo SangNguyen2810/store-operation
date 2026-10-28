@@ -1,4 +1,4 @@
-.PHONY: install dev dev-api dev-web test test-api test-web lint typecheck build check
+.PHONY: install dev dev-api dev-web redis-up redis-down test test-api test-web lint typecheck build check
 
 install:
 	cd web && npm install
@@ -12,6 +12,13 @@ dev-api:
 
 dev-web:
 	cd web && npm run dev
+
+# Optional query cache: `make redis-up`, then `REDIS_URL=redis://localhost:6379 make dev`.
+redis-up:
+	docker compose up -d --wait redis
+
+redis-down:
+	docker compose down
 
 test: test-api test-web
 

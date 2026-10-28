@@ -1,0 +1,14 @@
+# Redis for the optional query cache. Pagila keeps its own compose file in its own repo.
+# Start with `make redis-up`, then run the API with REDIS_URL=redis://localhost:6379.
+# If 6379 is taken (for example by a local redis-server), pick another host port:
+# `REDIS_PORT=6380 make redis-up`, and use REDIS_URL=redis://localhost:6380.
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

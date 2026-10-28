@@ -2,7 +2,7 @@
 
 A portfolio project for a Principal Frontend Engineer interview (React/Vue role), built on the Pagila DVD-rental database. It is meant to be walked through on screen as a code sample, so the plan favours clear structure and explainable trade-offs over feature count.
 
-**Status:** Phase 1 is built, verified, and published to GitHub with a CI workflow. CI has no database yet, so the integration tests skip there. Phase 2 is now an API gateway plus a Redis cache (section 10, planned, not started); the Rentals Explorer is postponed. The full microservices split is not started.
+**Status:** Phase 1 is built, verified, and published to GitHub with a CI workflow. CI has no database yet, so the integration tests skip there. Phase 2 is now an API gateway plus a Redis cache (section 10): the cache is built, the gateway is not started. The full microservices split is not started.
 
 ---
 
@@ -60,14 +60,8 @@ A portfolio project for a Principal Frontend Engineer interview (React/Vue role)
 
 Shared params: `from`, `to` (YYYY-MM-DD, inclusive, max 366 days), `store`; `granularity` for revenue. Defaults are the 30 days ending at the as-of date. Bad input returns an RFC 7807-style `400`. Internal errors never leak details.
 
-### Phase 2 (planned, not started): gateway and Redis cache
+### Phase 2 (in progress: cache built, gateway not started): gateway and Redis cache
 - A gateway in front of the API (routing, access log, per-IP rate limit, timeouts) and a Redis cache for the heavy analytics queries, added as seams without changing the use cases. Details, decisions and acceptance criteria are in section 10.
-
-### Postponed: Rentals Explorer
-Postponed in favour of the gateway and cache work. Kept here for later.
-- Frontend: server-side paginated, sortable, filterable table of rentals (status out/returned/overdue, store, category, customer search), cursor pagination or virtualised list, detail drawer with state in the URL, a reusable generic `DataTable<T>`.
-- Backend: a second context, `internal/rentals/` (`GET /rentals` with cursor, `GET /rentals/{id}`), laid out like `analytics` (domain, app, adapters) and plugged in with its own `Register(mux, ...)`.
-- Needs its own acceptance criteria before work starts. "Overdue" needs the as-of date (rentals end 2022-08-23).
 
 ### Later (not started): microservices
 Turn each context into its own `cmd/<service>` binary with its own pool, then split the database. The gateway comes first, in phase 2 (section 10). See the README for the seam.
@@ -88,9 +82,12 @@ api/                                 Go, one go.mod
       app/                           use cases (Service) + ports.go (Repo, the driven port). Imports domain only.
       adapters/
         postgres/                    implements Repo; owns all the SQL
+        cache/                       implements Repo in front of another Repo (optional, REDIS_URL); picks what to cache and the keys
         http/                        (package httpadapter) routes, parsing, validation, response types
     platform/                        shared plumbing, knows no context
       db/                            read-only pool (default_transaction_read_only=on, 10s statement timeout)
+      rdb/                           Redis client with short timeouts and no retries
+      cache/                         read-through cache: Redis, TTL, shared lookups, fail-open (generic, no context types)
       config/                        environment settings
       httpx/                         JSON and problem responses, request logging, /healthz, /api/meta
     archtest/                        test that enforces the import rules below
@@ -121,10 +118,11 @@ Dependencies point inward only. `internal/archtest` fails `go test ./...` (so CI
 | `cmd` | anything (composition root) |
 
 Decisions:
-- **Packages in one `go.mod`, not one module per context.** Separate modules and a `go.work` only pay off once there are two or more real contexts. Revisit when `rentals` exists.
+- **Packages in one `go.mod`, not one module per context.** Separate modules and a `go.work` only pay off once there are two or more real contexts. Revisit when a second context exists.
 - **Response types live in the HTTP adapter.** The domain has no `json` tags, so the domain can change without breaking the API, and the transport can change (for example to gRPC) without touching the domain.
 - **No extra repository/service/controller layers** on top of hexagonal. They would add files without adding a boundary.
 - **Shared endpoints** (`/healthz`, `/api/meta`) are not analytics concerns, so `cmd/api` registers them next to each context's `Register(mux, ...)`.
+- **The cache is a decorator on the port.** `cmd/api` wraps the Postgres repo in the cache adapter when `REDIS_URL` is set; the use cases and handlers never know. See section 10.
 
 Other key seams: the chart library is isolated; `AsyncSection` is the single place for query states.
 
@@ -255,11 +253,13 @@ Notes:
 
 ---
 
-## 10. Planned: gateway and Redis cache (not started)
+## 10. Planned: gateway and Redis cache
 
-**Goal.** Show system-architecture skills on the existing app: an edge gateway and a cache, each added at a seam so the use cases and handlers do not change. This replaces the Rentals Explorer for now.
+**Progress:** Phase A (Redis cache) is built and verified, not yet committed. Phase B (gateway) and Phase C (measure and document) are not started.
 
-**Requirements (answered).** The cache lives in Redis and is checked first: on a hit within the TTL the cached value is returned, otherwise the query runs and the result is stored. The gateway does routing, access log, rate limit and timeouts only. Redis runs in Docker. No rentals work.
+**Goal.** Show system-architecture skills on the existing app: an edge gateway and a cache, each added at a seam so the use cases and handlers do not change.
+
+**Requirements (answered).** The cache lives in Redis and is checked first: on a hit within the TTL the cached value is returned, otherwise the query runs and the result is stored. The gateway does routing, access log, rate limit and timeouts only. Redis runs in Docker.
 
 **Measured baseline.** On this Pagila copy the heaviest analytics queries over the full date range take about 19 ms each (psql `\timing`, one run each: payments joined to rentals, and top films). The data is small, so the cache is not needed for speed here. Its value is as an architecture demonstration, and Phase C reports whatever is measured, including a small gain, rather than assuming one.
 
@@ -267,7 +267,7 @@ Notes:
 
 | Area | Decision | Why |
 |---|---|---|
-| Cache location | Cache-aside in Redis, as a driven adapter `analytics/adapters/cache` that implements `app.Repo` and wraps `postgres.Repo`. Wired in `main.go`: `app.NewService(cache.New(rdb, postgres.New(pool)))` | The use cases and handlers do not change. A gateway response cache was rejected: it sits above the hexagon and needs its own key normalisation |
+| Cache location | Cache-aside in Redis. The mechanics live in `platform/cache` (generic: Redis, TTL, shared lookups, fail-open). A thin driven adapter `analytics/adapters/cache` implements `app.Repo`, wraps `postgres.Repo`, and only decides what is cached and how keys are built. Wired in `main.go`: `app.NewService(cache.New(platformcache.New(rc, ttl), postgres.New(pool)))` | The use cases and handlers do not change, and another context can reuse the platform part. Chosen over keeping everything in the adapter, which would have meant copying the mechanics into the next context. A gateway response cache was rejected: it sits above the hexagon and needs its own key normalisation |
 | What is cached | `Totals`, `Revenue`, `TopFilms`. Not `Stores` (tiny) | `KPIs` calls `Totals` twice (current and previous window), so each window is cached on its own and reused |
 | Flow | Check Redis; on a hit return it; on a miss query Postgres, store with the TTL, return | The behaviour asked for |
 | TTL and invalidation | `CACHE_TTL`, default 10 minutes; no invalidation | The dataset is static (as-of 2022). Live data would need short TTLs or explicit invalidation, and the README will say so |
@@ -287,11 +287,19 @@ Notes:
 
 Each phase ships and is verified on its own; stop for a go-ahead after each.
 
-**Phase A: Redis cache**
+**Phase A: Redis cache (done)**
 - `docker-compose.yml` for Redis, `REDIS_URL` and `CACHE_TTL` in config and `.env.example`, the `go-redis` dependency.
 - `analytics/adapters/cache` with the key builder, JSON codec, `singleflight` and fail-open behaviour; wire it in `main.go`.
 - Tests with `miniredis` (pure Go, so they run in CI with no Redis): hit, miss, TTL expiry, two windows of one KPI call cached separately, key uniqueness per filter, concurrent cold requests cause one inner call, Redis down still returns data. An integration test against real Redis skips when it is unreachable.
 - Verify: `go test ./...`, `go vet`, `gofmt`, the architecture test (adapters may use third-party packages), then by hand: a repeat request is a logged hit, stopping Redis still returns 200, and responses are byte-identical with and without the cache.
+
+**Phase A result**
+- Built: `platform/cache` (generic `Fetch`: Redis, JSON codec, TTL, `singleflight` via `DoChan`, fail-open), `analytics/adapters/cache` (thin: which methods are cached and the keys), `platform/rdb` (short timeouts, no retries; an unreachable Redis is only logged at start), `REDIS_URL` and `CACHE_TTL` config, wiring in `main.go`, `docker-compose.yml` (host port set with `REDIS_PORT`, default 6379), `make redis-up` and `make redis-down`, and architecture-test cases for the new adapter.
+- Tests: 9 in `platform/cache` and 5 in the adapter, against `miniredis`, all passing with `-race`. Three deliberate breakages (no TTL, store left out of the key, no `singleflight`) each made a test fail, in the package that owns that behaviour, then were reverted. A fourth (wrong method label in a key) survived because the films key has an extra segment, so it cannot collide: an equivalent change, not a gap. The full Go suite, `gofmt`, `go vet` and `oxlint` pass; the Postgres integration tests ran against the live Pagila container.
+- End to end, with Postgres and Redis in Docker: 11 requests (success, empty windows, unknown store, a 400) returned status and body byte-identical to an API without the cache, on both the cold and the warm call. Entries carry the 10 minute TTL. With Redis stopped, requests still return 200 with the same bodies and a warning is logged.
+- Quick timing, one run on a laptop (curl total time): top films cold 9 ms, warm about 1 ms, versus about 7 ms without the cache. Phase C repeats this properly.
+- Deviations: the generic cache logic was first written inside the analytics adapter, then moved to `platform/cache` at your request (all tests and the end-to-end check were repeated after the move). `go get` first raised the module to Go 1.26; the dependencies were pinned instead (`go-redis` v9.14.0, `miniredis` v2.35.0, `x/sync` v0.17.0) so `go.mod` stays at Go 1.25.0 and CI is unaffected. Port 6379 was taken by a local `redis-server` on the machine, so the Docker host port became configurable.
+- Not done in this phase: the log line shows hit, miss or coalesced per query, but there are no counters or metrics endpoint.
 
 **Phase B: Gateway**
 - `internal/gateway` (proxy, request id, access log, rate limiter, error responses) and `cmd/gateway`; Makefile runs Redis, analytics, gateway and web; config for ports and limits.
@@ -330,4 +338,4 @@ Each phase ships and is verified on its own; stop for a go-ahead after each.
 1. Check the first CI run on GitHub and fix what fails.
 2. Phase 2: gateway and Redis cache (section 10): confirm the acceptance criteria, then build Phase A, B, C.
 3. Optional: add a Pagila database to CI (section 9).
-4. Later: the Rentals Explorer, then splitting the packages into binaries and databases.
+4. Later: splitting the packages into binaries and databases.

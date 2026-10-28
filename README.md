@@ -28,6 +28,7 @@ Store Operations Dashboard gives staff a single page to answer three questions: 
 - **Shareable views.** Every filter lives in the URL. Reload or send the link and you get the same view.
 - **Resilient by design.** Each section loads, empties and fails on its own, with retry. One failing query never takes down the page.
 - **Read-only.** The app adds no tables, views, indexes or migrations. Its database connections are opened with `default_transaction_read_only=on`.
+- **Optional Redis cache.** Set `REDIS_URL` and the heavy queries are served from Redis within a TTL, with identical responses. If Redis is down the API keeps working from Postgres.
 
 ## Quick start
 
@@ -48,6 +49,14 @@ Open <http://localhost:5173>.
 | `make typecheck` | TypeScript project build check |
 | `make build` | Builds the API binary and the production web bundle |
 | `make check` | Everything CI runs: lint, typecheck, test, build |
+| `make redis-up` / `make redis-down` | Starts or stops Redis in Docker for the optional cache (see below) |
+
+**Optional query cache.** Start Redis, then point the API at it:
+
+```sh
+make redis-up                                     # or REDIS_PORT=6380 make redis-up if 6379 is taken
+REDIS_URL=redis://localhost:6379 make dev
+```
 
 ### Configuration
 
@@ -58,6 +67,8 @@ All settings are environment variables and all are optional. See [.env.example](
 | `ADDR` | `:8080` | API listen address |
 | `DATABASE_URL` | `postgres://postgres:123456@localhost:5432/postgres` | Pagila connection string |
 | `ASOF_DATE` | `2022-07-27` | The "today" for default date ranges |
+| `REDIS_URL` | *(unset)* | Turns the query cache on, for example `redis://localhost:6379`. Unset means no cache |
+| `CACHE_TTL` | `10m` | How long a cached query result stays valid |
 | `TEST_DATABASE_URL` | same as above | Database used by integration tests |
 | `REQUIRE_DB` | unset | If set, integration tests fail instead of skipping when the database is unreachable |
 
@@ -94,6 +105,8 @@ A small read-only JSON API. Every endpoint is `GET`, needs no authentication, an
 **Store attribution.** Money and rentals are attributed to a store through `payment → rental → inventory.store_id`, the same rule as Pagila's `sales_by_store` view. Only stores 1 and 2 hold inventory. An unknown store id is not an error: it simply matches nothing, so figures are 0 and lists are empty.
 
 **Numbers.** Amounts are plain numbers rounded to two decimals (the web app formats them as USD). Percentages are plain numbers too, so `-2.43` means -2.43%.
+
+**Caching.** With `REDIS_URL` set, the figures behind `/api/kpis`, `/api/revenue` and `/api/top/films` can be up to `CACHE_TTL` (10 minutes by default) old. The responses are byte-identical to the uncached ones, and there is no cache header. `/api/stores`, `/api/meta` and `/healthz` are never cached. The data is static (as-of 2022), so staleness is not visible here; live data would need short TTLs or explicit invalidation.
 
 **Content types.** Successful responses are `application/json`. Errors from the API are `application/problem+json` (see [Errors](#errors)).
 
@@ -449,7 +462,7 @@ The API uses six tables. Everything else in Pagila is untouched.
 | `store` | 500 (only 2 stocked) | The store list. |
 | `address`, `city`, `country` | 603, 600, 109 | The `City, Country` label of a store. |
 
-The remaining tables (`customer`, `staff`, `actor`, `category`, `language`, `film_actor`, `film_category`) are not queried. They are shown above so the diagram is complete, and for the planned Rentals Explorer.
+The remaining tables (`customer`, `staff`, `actor`, `category`, `language`, `film_actor`, `film_category`) are not queried. They are shown above so the diagram is complete.
 
 ### How the queries join
 
@@ -497,13 +510,14 @@ flowchart LR
         direction TB
         api["cmd/api<br/>composition root"]
         analytics["analytics context<br/>domain · app · adapters"]
-        platform["platform<br/>db · config · httpx"]
+        platform["platform<br/>db · rdb · cache · config · httpx"]
         api --> analytics
         api --> platform
         analytics --> platform
     end
     web -- "JSON over /api/*" --> api
     analytics -- "pgx · read-only pool" --> pg[("Pagila<br/>PostgreSQL 17")]
+    analytics -. "optional cache · REDIS_URL" .-> redis[("Redis")]
 ```
 
 **Four ideas hold the design together:**
@@ -531,21 +545,26 @@ flowchart LR
     end
 
     subgraph driven ["Driven side: gets called"]
+        cache["adapters/cache<br/>optional · implements Repo<br/>checks Redis first"]
         pg["adapters/postgres<br/>implements Repo<br/>owns all SQL"]
     end
 
+    redis[("Redis")]
     db[("Pagila<br/>PostgreSQL")]
 
     client -->|"HTTP request"| http
     http -->|"calls a use case"| app
     app -->|"asks for data"| port
     port -->|"implemented by"| pg
+    port -.->|"or by, when REDIS_URL is set"| cache
+    cache -->|"looks up"| redis
+    cache -->|"on a miss, asks the next Repo"| pg
     pg -->|"read-only SQL"| db
 ```
 
 - **Driving side:** something outside pushes work in. The HTTP adapter turns a request into a use-case call, and the app never knows HTTP exists.
 - **Core:** `app` holds the use cases and defines the `Repo` interface it needs. `domain` (the types and pure rules, standard library only) is used by every box here but sits outside this flow.
-- **Driven side:** the app reaches out for data through its own interface. The Postgres adapter implements it, so the app never knows about SQL.
+- **Driven side:** the app reaches out for data through its own interface. The Postgres adapter implements it, so the app never knows about SQL. The optional cache adapter implements the same interface and wraps the Postgres one, so the app does not know a cache exists either. `cmd/api` decides at startup whether to wrap it.
 
 The arrows show who **calls** whom, which is not who imports whom. `app` defines the `Repo` interface and calls it, but `app` never imports `adapters/postgres`. The adapter does not need `app` to work: Go interfaces are satisfied implicitly, so it only needs methods with matching signatures, written in `domain` types. It imports `app` for one line only, `var _ app.Repo = (*Repo)(nil)`, a compile-time check that a drifting signature fails in the adapter's own file instead of at the wiring. The dependency points inward, which is the allowed direction, and `app` knows nothing about SQL. That is what keeps SQL out of the core, and it is checked: the architecture test fails if `app` imports anything but `domain`. `cmd/api` is still the only file that wires both sides together. It builds the pieces once at startup and plugs them together, and it is not in the path of a request.
 
@@ -558,9 +577,11 @@ api/
       app/                       use cases + ports.go (the Repo port). Imports domain only.
       adapters/
         postgres/                driven adapter: implements Repo, owns all SQL
+        cache/                   driven adapter: implements Repo in front of another Repo; picks what to cache and the keys
         http/                    driving adapter: routes, validation, response types
     platform/                    shared plumbing that knows no context
-      db/  config/  httpx/       read-only pool, env config, JSON/problem/logging/health
+      db/  rdb/  cache/          read-only pool, Redis client, read-through cache (Redis, TTL, shared lookups)
+      config/  httpx/            env config, JSON/problem/logging/health
     archtest/                    enforces the import rules below
 ```
 
@@ -571,6 +592,8 @@ api/
 | A business rule (how a delta or previous window is computed) | `domain/` |
 | What the system can do (a new question it can answer) | `app/` |
 | A query, or how Pagila tables are read | `adapters/postgres/` |
+| What is cached, or how a query's key is built | `adapters/cache/` |
+| How caching works (Redis, TTL, shared lookups, failing open) | `platform/cache/` |
 | A route, a query parameter, or the JSON shape | `adapters/http/` |
 | Timeouts, logging, error format, the DB pool | `platform/` |
 | Which pieces are wired together | `cmd/api/main.go` |
@@ -615,6 +638,37 @@ sequenceDiagram
     H->>H: map to response type
     H-->>W: 200 JSON
 ```
+
+**With the cache on** (`REDIS_URL` set), every `Totals`, `Revenue` and `TopFilms` call above goes through the cache adapter first. A KPI request makes two `Totals` calls, one per window, and each is cached on its own:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as app.Service
+    participant C as adapters/cache
+    participant R as Redis
+    participant P as adapters/postgres
+    participant DB as Pagila
+
+    A->>C: Totals(window)
+    C->>R: GET analytics:v1:totals:from:to:store
+    alt hit, within the TTL
+        R-->>C: stored JSON
+        C-->>A: Totals
+    else miss, or Redis unreachable
+        R-->>C: nothing
+        C->>P: Totals(window)
+        P->>DB: one query, read-only
+        DB-->>P: figures
+        P-->>C: Totals
+        C->>R: SET with the TTL
+        C-->>A: Totals
+    end
+```
+
+- Requests for the same key at the same moment share one lookup, so a cold key causes one query.
+- A Redis error is logged and treated as a miss, so the request is still answered from Postgres. Errors from Postgres are returned and never cached.
+- Each lookup logs one `cache` line with the outcome: `hit`, `miss` or `coalesced`.
 
 Errors are handled once, at the edge: bad input becomes a `400` problem body with a reason, and anything else is logged server-side and returned as a generic `500`, so internals never reach the client.
 
@@ -703,9 +757,10 @@ Mobile-first with two breakpoints, `sm` (640 px) and `lg` (1024 px). Anything CS
 |---|---|
 | **Read-only safety** | Pool opened with `default_transaction_read_only=on`; an integration test confirms writes are rejected |
 | **Time zone** | Connections run in UTC, windows are inclusive whole days |
-| **Timeouts** | 10 s statement timeout, 5 s header read, 15 s response write, 10 s graceful shutdown |
+| **Timeouts** | 10 s statement timeout, 5 s header read, 15 s response write, 10 s graceful shutdown; Redis dial, read and write 250 ms with no retries |
 | **Errors** | RFC 7807-style problem bodies; internals are logged, never returned |
-| **Observability** | Structured `slog` request logs with method, path, query and duration; `/healthz` pings the database |
+| **Observability** | Structured `slog` request logs with method, path, query and duration; a `cache` log line per lookup (`hit`, `miss`, `coalesced`) when the cache is on; `/healthz` pings the database, not Redis |
+| **Caching** | Optional read-through Redis cache on `Totals`, `Revenue` and `TopFilms`; `CACHE_TTL` (10 min), no invalidation because the data is static; identical lookups share one query; fails open when Redis is down |
 | **Accessibility** | Keyboard-reachable controls, deltas shown by arrow and text (not colour alone), chart text alternative and table view |
 | **Performance** | Chart library lazy-loaded; first load is about 95 kB gzipped; previous data stays up while new filters load |
 
@@ -714,23 +769,26 @@ Mobile-first with two breakpoints, `sm` (640 px) and `lg` (1024 px). Anything CS
 | Decision | Alternatives considered | Why |
 |---|---|---|
 | Hexagonal layers per context | One flat package; classic handler/service/repository layers | The ports are the seams you cut along when splitting services. Extra layers would add files without adding a boundary. |
-| Packages in one `go.mod` | A `go.mod` per context with `go.work` | Separate modules only pay off with two or more real contexts. Revisit when `rentals` exists. |
+| Packages in one `go.mod` | A `go.mod` per context with `go.work` | Separate modules only pay off with two or more real contexts. Revisit when a second context exists. |
 | Response types in the HTTP adapter | JSON tags on domain types | The domain can change without breaking clients, and the transport can change (for example to gRPC) without touching the domain. |
 | Layer rules enforced by a test | A convention in the docs | Rules that are not checked drift. The test needs no extra tooling. |
 | Filters in the URL | Component or global state | Shareable, reload-safe, and the browser back button works. |
 | One `AsyncSection` for query states | Per-component spinners | A failing query degrades one section, not the page. |
 | Store attribution via `payment → rental → inventory.store_id` | Via `staff.store_id` | Matches the `sales_by_store` view; staff-based attribution does not work in this dataset. |
 | Chart library isolated and lazy-loaded | Import directly where needed | Swapping the library touches one folder (`components/libs/recharts`), and the first load stays small. |
+| Cache as an adapter on the `Repo` port, mechanics in `platform/cache` | A response cache at a gateway; caching inside the Postgres adapter or the use cases | The use cases and handlers do not change, the cache is switched on in one line of `main.go`, and another context can reuse the platform part. A gateway cache would sit above the hexagon and need its own key handling. |
+| The cache fails open | Failing the request when Redis is down | The cache is an optimisation, never a reason the API is down. Redis calls have short timeouts and no retries, so a dead Redis costs milliseconds. |
 | Tailwind, with our colour variables mapped in | Hand-written CSS; Tailwind's default palette with `dark:` variants | Styles sit beside the markup and states are explicit, while the existing light and dark tokens keep dark mode automatic and the colours unchanged. |
 
 ## Adding a context
 
-To add one (for example `rentals`):
+To add one (here called `<context>`):
 
-1. Create `internal/rentals/{domain,app,adapters/postgres,adapters/http}`, following `analytics`.
+1. Create `internal/<context>/{domain,app,adapters/postgres,adapters/http}`, following `analytics`.
 2. Define the repository port in `app/ports.go` and implement it in `adapters/postgres`.
 3. Expose `Register(mux, ...)` from `adapters/http`, and call it in `cmd/api/main.go`.
 4. Run `go test ./...`. The architecture test covers the new context automatically.
+5. To cache its queries, add a thin `adapters/cache` that implements the same port and calls `platform/cache.Fetch` with its own keys, then wrap the repo in `main.go` the way analytics does.
 
 ## Testing and CI
 
@@ -739,6 +797,8 @@ To add one (for example `rentals`):
 | `api` domain and app | Window and delta maths, KPI comparison with a fake `Repo` |
 | `api` HTTP adapter | Defaults, parameter passthrough, 10 bad-input cases, no leaked internals, health, 405 |
 | `api` Postgres adapter (integration) | Totals reconciled against the `sales_by_store` view and raw SQL; revenue series sums to the KPI total at every granularity; zero-fill; top films; pool rejects writes |
+| `api` platform cache | Against `miniredis`, so no Redis is needed in CI: repeat served from Redis, TTL set and expiry, separate keys, nil and empty slices preserved, concurrent cold requests load once, Redis down still serves data, errors and unreadable entries not kept, a caller hanging up does not lose the shared result |
+| `api` cache adapter | Repeats served from Redis, each KPI window cached on its own, distinct keys per window, store, granularity and limit, domain values survive the JSON round trip, `Stores` passes through |
 | `api` architecture | Import rules between layers and contexts, plus a check that the rules catch violations |
 | `web` architecture | Import rules between the layers, and that only `components/libs/recharts` imports `recharts`, with cases proving the rules catch violations |
 | `web` | Routing (dashboard at `/`, 404 elsewhere), URL and filter parsing, formatting, data shaping, breakpoint mapping, `AsyncSection` states, KPI cards, filter bar (including the collapsible panel, active count and reset), the page against a mocked API |
@@ -754,45 +814,46 @@ Correctness is checked against SQL written independently of the code under test.
 
 ## Splitting into microservices later
 
-Today everything is one deployable. The target keeps the same contexts and swaps the in-process wiring for network calls:
+Today everything is one deployable with one context. The target keeps the contexts and swaps the in-process wiring for network calls, so any context added later becomes its own service behind the gateway:
 
 ```mermaid
 flowchart LR
     subgraph today [Today: one deployable]
         direction TB
         t_api["cmd/api"] --> t_an["analytics"]
-        t_api --> t_re["rentals (postponed)"]
         t_an --> t_db[("one Pagila database")]
-        t_re --> t_db
     end
     subgraph later [Later: one service per context]
         direction TB
         gw["gateway<br/>routes /api/*"] --> s_an["analytics service"]
-        gw --> s_re["rentals service"]
+        gw -.-> s_next["another context's service"]
         s_an --> d_an[("analytics DB")]
-        s_re --> d_re[("rentals DB")]
+        s_next -.-> d_next[("its own DB")]
     end
     today ==> later
 ```
 
 The seams are already in place:
 
-1. Each context reaches its database only through its own `Repo` port and owns its SQL, and the architecture test stops one context importing another. A future `rentals` context does the same, with no cross-context queries.
+1. Each context reaches its database only through its own `Repo` port and owns its SQL, and the architecture test stops one context importing another. Any future context does the same, with no cross-context queries.
 2. The HTTP adapter depends on a small `Analytics` interface, not a concrete type.
-3. To split: give each context its own `cmd/<service>` binary and its own `db.Open` pool, put a gateway in front that routes `/api/*` (the web app only talks to `/api`), then move each context's tables into its own database. Cross-service data, such as a rental's customer name, goes behind a port: the in-process implementation is swapped for an HTTP or gRPC client, or a replicated snapshot, instead of a join.
+3. To split: give each context its own `cmd/<service>` binary and its own `db.Open` pool, put a gateway in front that routes `/api/*` (the web app only talks to `/api`), then move each context's tables into its own database. Cross-service data goes behind a port: the in-process implementation is swapped for an HTTP or gRPC client, or a replicated snapshot, instead of a join.
+4. The cache moves with its context. Keys start with `analytics:v1:`, so services can share one Redis without clashing, and each service decides what to cache.
 
-## Planned: gateway and Redis cache
+## Phase 2: Redis cache (built) and gateway (planned)
 
-> **Not built yet.** This section describes the next phase so the design can be reviewed first. The full plan, decisions and acceptance criteria are in [docs/PLAN.md](docs/PLAN.md#10-planned-gateway-and-redis-cache-not-started).
+> **Status:** the Redis cache is built (off unless `REDIS_URL` is set), and the flow above already shows it. The gateway is **not built yet**, so the API still listens on `:8080` itself. The full plan, decisions and acceptance criteria are in [docs/PLAN.md](docs/PLAN.md#10-planned-gateway-and-redis-cache).
+
+Target shape once the gateway exists (the cache part is real today):
 
 ```mermaid
 flowchart LR
     Browser["Browser"] --> GW
-    subgraph edge [Edge: cmd/gateway, :8080]
+    subgraph edge ["Edge (planned): cmd/gateway, :8080"]
         GW["routing, access log,<br/>per-IP rate limit, timeouts"]
     end
     GW -->|"/api/*, /healthz"| API
-    subgraph svc [Analytics: cmd/api, :8081]
+    subgraph svc ["Analytics: cmd/api (:8081 behind the gateway)"]
         API["adapters/http"] --> APP["app"]
         APP -->|"Repo port"| CACHE["adapters/cache<br/>(cache-aside)"]
         CACHE -->|"hit"| REDIS[("Redis")]
@@ -801,17 +862,16 @@ flowchart LR
     PG --> DB[("Pagila")]
 ```
 
-- **Cache.** A new driven adapter implements the same `Repo` port and wraps the Postgres one, so the use cases and handlers do not change. It checks Redis first and returns the stored value while it is within the TTL; on a miss it queries Postgres, stores the result and returns it. `Totals`, `Revenue` and `TopFilms` are cached. Concurrent identical misses cause a single query. If Redis is down, requests fall through to Postgres. With `REDIS_URL` unset there is no cache.
+- **Cache.** A new driven adapter implements the same `Repo` port and wraps the Postgres one, so the use cases and handlers do not change. The adapter only chooses what to cache and builds the keys; the mechanics (Redis, TTL, shared lookups, failing open) live in `platform/cache`, so another context can reuse them. It checks Redis first and returns the stored value while it is within the TTL; on a miss it queries Postgres, stores the result and returns it. `Totals`, `Revenue` and `TopFilms` are cached. Concurrent identical misses cause a single query. If Redis is down, requests fall through to Postgres. With `REDIS_URL` unset there is no cache.
 - **Gateway.** A small reverse proxy on the standard library. It routes `/api/*` and `/healthz` to analytics, writes one access-log line per request with a request id (also passed upstream), rate-limits per IP with a 429 and `Retry-After`, and enforces timeouts with 502 and 504 responses. It has no auth, load balancing or TLS.
 - **Redis** runs in Docker through a `docker-compose.yml` in this repo. The apps themselves do not run in Docker.
-- **Honest note on benefit.** The heaviest queries take about 19 ms on this dataset, so the cache is not needed for speed. It is here to demonstrate the pattern, and the measured cold and warm times will be reported in this section when it is built. The data is static (as-of 2022), so there is a TTL and no invalidation; live data would need short TTLs or explicit invalidation.
+- **Honest note on benefit.** The heaviest queries take about 19 ms on this dataset, so the cache is not needed for speed. It is here to demonstrate the pattern. A first quick check (one run on a laptop, top films through curl) took about 9 ms cold and 1 ms warm, against about 7 ms with no cache; proper cold and warm numbers will be added here when the measuring phase is done. The data is static (as-of 2022), so there is a TTL and no invalidation; live data would need short TTLs or explicit invalidation.
 
 ## Project status and roadmap
 
 - [x] **Phase 1: Overview.** KPIs, revenue by store, top films, URL filters.
 - [x] **Backend refactor.** Hexagonal contexts with enforced layer rules.
-- [ ] **Phase 2: Gateway and Redis cache.** Planned, not started. See above and [docs/PLAN.md](docs/PLAN.md).
-- [ ] **Rentals Explorer.** Postponed.
+- [ ] **Phase 2: Gateway and Redis cache.** The cache is built; the gateway and the measured results are still to do. See above and [docs/PLAN.md](docs/PLAN.md).
 - [ ] **Microservices split.** Separate binaries and then separate databases; the gateway comes first, in phase 2.
 
 See [docs/PLAN.md](docs/PLAN.md) for decisions, verification notes and known gaps.

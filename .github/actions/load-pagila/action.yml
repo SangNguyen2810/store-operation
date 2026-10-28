@@ -1,0 +1,15 @@
+name: Load Pagila
+description: Loads the Pagila sample database, pinned to a commit that loads on postgres:17, into the Postgres service on localhost.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        PGPASSWORD: postgres
+        PAGILA_REF: 5ba5a57
+      run: |
+        base=https://raw.githubusercontent.com/devrimgunduz/pagila/$PAGILA_REF
+        for f in pagila-schema.sql pagila-data.sql; do
+          curl -sSf --retry 3 -o "$RUNNER_TEMP/$f" "$base/$f"
+          psql -q -v ON_ERROR_STOP=1 -h localhost -U postgres -f "$RUNNER_TEMP/$f"
+        done

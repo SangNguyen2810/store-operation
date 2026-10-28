@@ -136,3 +136,64 @@ func TestMethodNotAllowed(t *testing.T) {
 		t.Errorf("status %d, want 405", rec.Code)
 	}
 }
+
+func TestStoresResponse(t *testing.T) {
+	rec := do(t, &fakeSvc{}, "/api/stores")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != `[{"id":1,"label":"A"}]` {
+		t.Errorf("body = %s", got)
+	}
+}
+
+func TestEveryEndpointHidesServiceErrors(t *testing.T) {
+	for _, target := range []string{"/api/stores", "/api/kpis", "/api/revenue", "/api/top/films"} {
+		t.Run(target, func(t *testing.T) {
+			rec := do(t, &fakeSvc{err: errors.New("secret")}, target)
+			if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "secret") {
+				t.Errorf("status %d body %s", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
+type dataSvc struct{ fakeSvc }
+
+func (dataSvc) KPIs(context.Context, domain.Filter) (domain.KPIs, error) {
+	d := 12.5
+	return domain.KPIs{
+		Revenue:         domain.Metric{Value: 10, Previous: 8, DeltaPct: &d},
+		Rentals:         domain.Metric{Value: 3, Previous: 0},
+		ActiveCustomers: domain.Metric{Value: 2, Previous: 2},
+		AvgPayment:      domain.Metric{Value: 1.5, Previous: 1},
+	}, nil
+}
+func (dataSvc) Revenue(context.Context, domain.Filter, domain.Granularity) ([]domain.RevenuePoint, error) {
+	return []domain.RevenuePoint{{Bucket: "2022-07-01", StoreID: 2, Revenue: 9.5}}, nil
+}
+func (dataSvc) TopFilms(context.Context, domain.Filter, int) ([]domain.FilmStat, error) {
+	return []domain.FilmStat{{FilmID: 7, Title: "T", Rentals: 4, Revenue: 11}}, nil
+}
+
+// The JSON field names are the API contract the web app depends on.
+func TestResponseShapes(t *testing.T) {
+	cases := map[string]struct{ target, want string }{
+		"kpis": {"/api/kpis", `{"revenue":{"value":10,"previous":8,"deltaPct":12.5},"rentals":{"value":3,"previous":0,"deltaPct":null},` +
+			`"activeCustomers":{"value":2,"previous":2,"deltaPct":null},"avgPayment":{"value":1.5,"previous":1,"deltaPct":null}}`},
+		"revenue": {"/api/revenue", `[{"bucket":"2022-07-01","storeId":2,"revenue":9.5}]`},
+		"films":   {"/api/top/films", `[{"filmId":7,"title":"T","rentals":4,"revenue":11}]`},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			handler(&dataSvc{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, c.target, nil))
+			if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" {
+				t.Fatalf("status %d type %q", rec.Code, rec.Header().Get("Content-Type"))
+			}
+			if got := strings.TrimSpace(rec.Body.String()); got != c.want {
+				t.Errorf("body\n got %s\nwant %s", got, c.want)
+			}
+		})
+	}
+}

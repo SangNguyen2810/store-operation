@@ -3,7 +3,6 @@ package postgres_test
 import (
 	"context"
 	"math"
-	"os"
 	"testing"
 	"time"
 
@@ -11,30 +10,13 @@ import (
 
 	"github.com/SangNguyen2810/store-operation/api/internal/analytics/adapters/postgres"
 	"github.com/SangNguyen2810/store-operation/api/internal/analytics/domain"
-	"github.com/SangNguyen2810/store-operation/api/internal/platform/db"
+	"github.com/SangNguyen2810/store-operation/api/internal/platform/testutil"
 )
 
 // These tests read the live Pagila database (read-only) and skip when it is unreachable (fail if REQUIRE_DB is set, as in CI).
 // Expected values come from independent SQL: the sales_by_store view and raw tables.
 
-func testPool(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		url = "postgres://postgres:123456@localhost:5432/postgres"
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	pool, err := db.Open(ctx, url)
-	if err != nil {
-		if os.Getenv("REQUIRE_DB") != "" {
-			t.Fatalf("pagila not reachable: %v", err)
-		}
-		t.Skipf("pagila not reachable: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
-}
+func testPool(t *testing.T) *pgxpool.Pool { return testutil.Pool(t) }
 
 func d(s string) time.Time {
 	t, _ := time.Parse("2006-01-02", s)

@@ -53,14 +53,9 @@ func run() error {
 		slog.Info("cache enabled", "ttl", cfg.CacheTTL)
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", httpx.Health(pool))
-	mux.HandleFunc("GET /api/meta", httpx.Meta(cfg.AsOf))
-	httpadapter.Register(mux, app.NewService(repo), cfg.AsOf)
-
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpx.LogRequests(mux),
+		Handler:           newHandler(pool, repo, cfg.AsOf),
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      15 * time.Second,
 	}
@@ -80,4 +75,14 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+// newHandler wires the HTTP surface: health, meta and the analytics routes,
+// behind request logging.
+func newHandler(db httpx.Pinger, repo app.Repo, asOf time.Time) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", httpx.Health(db))
+	mux.HandleFunc("GET /api/meta", httpx.Meta(asOf))
+	httpadapter.Register(mux, app.NewService(repo), asOf)
+	return httpx.LogRequests(mux)
 }

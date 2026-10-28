@@ -2,7 +2,7 @@
 
 A portfolio project for a Principal Frontend Engineer interview (React/Vue role), built on the Pagila DVD-rental database. It is meant to be walked through on screen as a code sample, so the plan favours clear structure and explainable trade-offs over feature count.
 
-**Status:** Phase 1 is built, verified, and published to GitHub with a CI workflow. CI has no database yet, so the integration tests skip there. Phase 2 and the microservices split are not started.
+**Status:** Phase 1 is built, verified, and published to GitHub with a CI workflow. CI has no database yet, so the integration tests skip there. Phase 2 is now an API gateway plus a Redis cache (section 10, planned, not started); the Rentals Explorer is postponed. The full microservices split is not started.
 
 ---
 
@@ -60,16 +60,20 @@ A portfolio project for a Principal Frontend Engineer interview (React/Vue role)
 
 Shared params: `from`, `to` (YYYY-MM-DD, inclusive, max 366 days), `store`; `granularity` for revenue. Defaults are the 30 days ending at the as-of date. Bad input returns an RFC 7807-style `400`. Internal errors never leak details.
 
-### Phase 2 (not started): Rentals Explorer
+### Phase 2 (planned, not started): gateway and Redis cache
+- A gateway in front of the API (routing, access log, per-IP rate limit, timeouts) and a Redis cache for the heavy analytics queries, added as seams without changing the use cases. Details, decisions and acceptance criteria are in section 10.
+
+### Postponed: Rentals Explorer
+Postponed in favour of the gateway and cache work. Kept here for later.
 - Frontend: server-side paginated, sortable, filterable table of rentals (status out/returned/overdue, store, category, customer search), cursor pagination or virtualised list, detail drawer with state in the URL, a reusable generic `DataTable<T>`.
 - Backend: a second context, `internal/rentals/` (`GET /rentals` with cursor, `GET /rentals/{id}`), laid out like `analytics` (domain, app, adapters) and plugged in with its own `Register(mux, ...)`.
 - Needs its own acceptance criteria before work starts. "Overdue" needs the as-of date (rentals end 2022-08-23).
 
 ### Later (not started): microservices
-Turn each context into its own `cmd/<service>` binary with its own pool, add a gateway, then split the database. See the README for the seam.
+Turn each context into its own `cmd/<service>` binary with its own pool, then split the database. The gateway comes first, in phase 2 (section 10). See the README for the seam.
 
 ### Out of scope
-Auth, caching (in-memory first, Redis later), Docker images for the app, Kubernetes, returns and late-fee handling, customer-facing site.
+Auth, Docker images for the app (Redis alone runs in Docker, section 10), Kubernetes, load balancing and TLS at the gateway, returns and late-fee handling, customer-facing site.
 
 ---
 
@@ -251,9 +255,79 @@ Notes:
 
 ---
 
-## 10. Next steps, in order
+## 10. Planned: gateway and Redis cache (not started)
+
+**Goal.** Show system-architecture skills on the existing app: an edge gateway and a cache, each added at a seam so the use cases and handlers do not change. This replaces the Rentals Explorer for now.
+
+**Requirements (answered).** The cache lives in Redis and is checked first: on a hit within the TTL the cached value is returned, otherwise the query runs and the result is stored. The gateway does routing, access log, rate limit and timeouts only. Redis runs in Docker. No rentals work.
+
+**Measured baseline.** On this Pagila copy the heaviest analytics queries over the full date range take about 19 ms each (psql `\timing`, one run each: payments joined to rentals, and top films). The data is small, so the cache is not needed for speed here. Its value is as an architecture demonstration, and Phase C reports whatever is measured, including a small gain, rather than assuming one.
+
+### Decisions
+
+| Area | Decision | Why |
+|---|---|---|
+| Cache location | Cache-aside in Redis, as a driven adapter `analytics/adapters/cache` that implements `app.Repo` and wraps `postgres.Repo`. Wired in `main.go`: `app.NewService(cache.New(rdb, postgres.New(pool)))` | The use cases and handlers do not change. A gateway response cache was rejected: it sits above the hexagon and needs its own key normalisation |
+| What is cached | `Totals`, `Revenue`, `TopFilms`. Not `Stores` (tiny) | `KPIs` calls `Totals` twice (current and previous window), so each window is cached on its own and reused |
+| Flow | Check Redis; on a hit return it; on a miss query Postgres, store with the TTL, return | The behaviour asked for |
+| TTL and invalidation | `CACHE_TTL`, default 10 minutes; no invalidation | The dataset is static (as-of 2022). Live data would need short TTLs or explicit invalidation, and the README will say so |
+| Key | `analytics:v1:<method>:<from>:<to>:<store or all>:<granularity or limit>` | Deterministic and unique per query. The version prefix is bumped when the stored format changes |
+| Stored value | JSON of the domain result | Domain types carry no JSON tags, so field names are the Go names. The `v1` prefix protects against format changes |
+| Stampede | `singleflight` per key | One cold key causes one Postgres query, however many requests arrive together |
+| Failure | Fail open: a Redis error is logged and the request is served from Postgres | The cache must never be a reason the API is down |
+| Switch | Cache is off when `REDIS_URL` is unset (the default) | Tests, CI and `make dev` without Redis behave as today |
+| Gateway | New `cmd/gateway` and `internal/gateway`, built on the standard library `httputil.ReverseProxy` | No framework; the gateway is a context of its own and imports only `platform` |
+| Gateway features | Routing (`/api/*` and `/healthz` to analytics); access log with method, path, status, duration, client IP and request id (the id is passed upstream in `X-Request-Id`); per-IP token-bucket rate limit returning a 429 problem response with `Retry-After`; server timeouts and upstream dial and response-header timeouts returning 502 or 504 problem responses | The four features requested |
+| Not in the gateway | Auth, load balancing, TLS, caching, retries | Out of scope; one upstream only |
+| Rate-limit key | The connection's remote IP; `X-Forwarded-For` is not trusted | Nothing sits in front of the gateway. Idle limiter entries are evicted so memory stays bounded |
+| Ports | Gateway on `:8080`, so the web dev proxy is unchanged; analytics moves to `:8081` via `ADDR` | The browser only ever talks to the gateway |
+| Docker | `docker-compose.yml` at the repo root runs Redis only (`redis:7-alpine`, bound to localhost:6379). Pagila keeps its own compose in its own repo | Docker images for the apps stay out of scope |
+
+### Phases
+
+Each phase ships and is verified on its own; stop for a go-ahead after each.
+
+**Phase A: Redis cache**
+- `docker-compose.yml` for Redis, `REDIS_URL` and `CACHE_TTL` in config and `.env.example`, the `go-redis` dependency.
+- `analytics/adapters/cache` with the key builder, JSON codec, `singleflight` and fail-open behaviour; wire it in `main.go`.
+- Tests with `miniredis` (pure Go, so they run in CI with no Redis): hit, miss, TTL expiry, two windows of one KPI call cached separately, key uniqueness per filter, concurrent cold requests cause one inner call, Redis down still returns data. An integration test against real Redis skips when it is unreachable.
+- Verify: `go test ./...`, `go vet`, `gofmt`, the architecture test (adapters may use third-party packages), then by hand: a repeat request is a logged hit, stopping Redis still returns 200, and responses are byte-identical with and without the cache.
+
+**Phase B: Gateway**
+- `internal/gateway` (proxy, request id, access log, rate limiter, error responses) and `cmd/gateway`; Makefile runs Redis, analytics, gateway and web; config for ports and limits.
+- Tests with `httptest` upstreams: routing, request id passed upstream, access log fields, 429 with `Retry-After`, 504 on a slow upstream, 502 on a dead upstream, and limiter eviction.
+- Verify: `go test ./...`, then through the gateway every endpoint returns the same JSON as calling analytics directly, and the web app works unchanged.
+
+**Phase C: Measure and document**
+- A small load script that compares cold and warm requests through the gateway; record the numbers in the README.
+- README: updated architecture diagram, configuration table, key decisions, and the limits (static data, one upstream). Update this plan and `.env.example`.
+- CI is unchanged: no Redis service is needed because the unit tests use `miniredis`.
+
+### Acceptance criteria (draft, confirm before Phase A)
+
+1. Through the gateway the web app works unchanged, and every response is byte-identical to today's.
+2. With `REDIS_URL` set, a repeated identical request is served from Redis and Postgres is queried once, shown by a test and a log line.
+3. A cached value expires after `CACHE_TTL` and is then queried again.
+4. Concurrent identical cold requests cause one Postgres query.
+5. With Redis stopped, the API still returns correct data and logs the failure.
+6. With `REDIS_URL` unset, behaviour is exactly as today.
+7. The gateway writes one access-log line per request with method, path, status, duration, client IP and request id, and passes the request id upstream.
+8. Exceeding the rate limit returns a 429 problem response with `Retry-After`; a slow upstream returns a 504 and a dead upstream a 502.
+9. The architecture test still passes, `gateway` imports only `platform`, and CI stays green with no database or Redis.
+10. The README reports the measured cold and warm times honestly, and says the data is static.
+
+### Risks
+
+- Caching a 19 ms read-only workload adds a moving part. This is a demonstration, and the README says so.
+- The cached JSON is coupled to the domain type shapes; the key version prefix is the guard.
+- `make dev` now runs four things (Redis, analytics, gateway, web), so failures are harder to read; the access log and request id are there to help.
+- New dependencies: `go-redis/v9` (runtime) and `miniredis` (tests only).
+
+---
+
+## 11. Next steps, in order
 
 1. Check the first CI run on GitHub and fix what fails.
-2. Phase 2: write requirements and acceptance criteria for the Rentals Explorer, plan, then build.
-3. Optional: add a Pagila database to CI (section 5).
-4. Microservices phase: split the packages into binaries, add a gateway, then split databases.
+2. Phase 2: gateway and Redis cache (section 10): confirm the acceptance criteria, then build Phase A, B, C.
+3. Optional: add a Pagila database to CI (section 9).
+4. Later: the Rentals Explorer, then splitting the packages into binaries and databases.

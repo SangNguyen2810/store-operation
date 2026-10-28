@@ -761,7 +761,7 @@ flowchart LR
     subgraph today [Today: one deployable]
         direction TB
         t_api["cmd/api"] --> t_an["analytics"]
-        t_api --> t_re["rentals (phase 2)"]
+        t_api --> t_re["rentals (postponed)"]
         t_an --> t_db[("one Pagila database")]
         t_re --> t_db
     end
@@ -781,11 +781,37 @@ The seams are already in place:
 2. The HTTP adapter depends on a small `Analytics` interface, not a concrete type.
 3. To split: give each context its own `cmd/<service>` binary and its own `db.Open` pool, put a gateway in front that routes `/api/*` (the web app only talks to `/api`), then move each context's tables into its own database. Cross-service data, such as a rental's customer name, goes behind a port: the in-process implementation is swapped for an HTTP or gRPC client, or a replicated snapshot, instead of a join.
 
+## Planned: gateway and Redis cache
+
+> **Not built yet.** This section describes the next phase so the design can be reviewed first. The full plan, decisions and acceptance criteria are in [docs/PLAN.md](docs/PLAN.md#10-planned-gateway-and-redis-cache-not-started).
+
+```mermaid
+flowchart LR
+    Browser["Browser"] --> GW
+    subgraph edge [Edge: cmd/gateway, :8080]
+        GW["routing, access log,<br/>per-IP rate limit, timeouts"]
+    end
+    GW -->|"/api/*, /healthz"| API
+    subgraph svc [Analytics: cmd/api, :8081]
+        API["adapters/http"] --> APP["app"]
+        APP -->|"Repo port"| CACHE["adapters/cache<br/>(cache-aside)"]
+        CACHE -->|"hit"| REDIS[("Redis")]
+        CACHE -->|"miss"| PG["adapters/postgres"]
+    end
+    PG --> DB[("Pagila")]
+```
+
+- **Cache.** A new driven adapter implements the same `Repo` port and wraps the Postgres one, so the use cases and handlers do not change. It checks Redis first and returns the stored value while it is within the TTL; on a miss it queries Postgres, stores the result and returns it. `Totals`, `Revenue` and `TopFilms` are cached. Concurrent identical misses cause a single query. If Redis is down, requests fall through to Postgres. With `REDIS_URL` unset there is no cache.
+- **Gateway.** A small reverse proxy on the standard library. It routes `/api/*` and `/healthz` to analytics, writes one access-log line per request with a request id (also passed upstream), rate-limits per IP with a 429 and `Retry-After`, and enforces timeouts with 502 and 504 responses. It has no auth, load balancing or TLS.
+- **Redis** runs in Docker through a `docker-compose.yml` in this repo. The apps themselves do not run in Docker.
+- **Honest note on benefit.** The heaviest queries take about 19 ms on this dataset, so the cache is not needed for speed. It is here to demonstrate the pattern, and the measured cold and warm times will be reported in this section when it is built. The data is static (as-of 2022), so there is a TTL and no invalidation; live data would need short TTLs or explicit invalidation.
+
 ## Project status and roadmap
 
 - [x] **Phase 1: Overview.** KPIs, revenue by store, top films, URL filters.
 - [x] **Backend refactor.** Hexagonal contexts with enforced layer rules.
-- [ ] **Phase 2: Rentals Explorer.** Not started.
-- [ ] **Microservices split.** Separate binaries, a gateway, then separate databases.
+- [ ] **Phase 2: Gateway and Redis cache.** Planned, not started. See above and [docs/PLAN.md](docs/PLAN.md).
+- [ ] **Rentals Explorer.** Postponed.
+- [ ] **Microservices split.** Separate binaries and then separate databases; the gateway comes first, in phase 2.
 
 See [docs/PLAN.md](docs/PLAN.md) for decisions, verification notes and known gaps.

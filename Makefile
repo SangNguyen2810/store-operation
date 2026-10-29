@@ -36,11 +36,12 @@ test-web:
 cover-web:
 	cd web && npm run test:coverage
 
-# End-to-end tests in a real browser. They start their own API (:8180) and web build (:4173)
-# against the Pagila on localhost:5432 (override with E2E_DATABASE_URL), so `make dev` can keep running.
+# One-off download of the browser the end-to-end tests use.
 e2e-install:
 	cd web && npx playwright install chromium
 
+# End-to-end tests in a real browser. They start their own API (:8180) and web build (:4173)
+# against the Pagila on localhost:5432 (override with E2E_DATABASE_URL), so `make dev` can keep running.
 e2e:
 	cd web && npm run e2e
 
@@ -66,5 +67,5 @@ build:
 	cd api && go build -o bin/api ./cmd/api
 	cd web && npm run build
 
-# Everything CI would run.
+# Lint, typecheck, the Go and web tests, and a build. CI also runs the coverage gates, e2e and k6.
 check: lint typecheck test build

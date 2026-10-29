@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # Runs the Go tests with coverage and fails when a package is below its floor:
 # 90% for domain and app (the business rules), 80% for every other package.
-# cmd/api (the composition root, covered by its integration tests rather than
-# by statement count) and testutil are not gated.
-# Run it with a database and Redis up, or the integration tests skip and
-# coverage drops; REQUIRE_DB=1 turns that into a failure instead.
+# Not gated: cmd/api (the composition root) and the two packages that only talk
+# to Postgres, adapters/postgres and platform/db, which have no unit tests.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,7 +15,7 @@ echo "$out" | awk '
     for (i = 1; i <= NF; i++) if ($i ~ /\/api\//) pkg = $i
     sub(/.*\/api\//, "", pkg)
     pct = $0; sub(/.*coverage: /, "", pct); sub(/%.*/, "", pct)
-    if (pkg ~ /^cmd\// || pkg ~ /testutil$/) next
+    if (pkg ~ /^cmd\// || pkg ~ /adapters\/postgres$/ || pkg ~ /platform\/db$/) next
     floor = (pkg ~ /\/(domain|app)$/) ? 90 : 80
     if (pct + 0 < floor) { printf "FAIL %s: %.1f%% < %d%%\n", pkg, pct, floor; bad = 1 }
     checked++

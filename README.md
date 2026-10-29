@@ -748,7 +748,7 @@ Mobile-first with two breakpoints, `sm` (640 px) and `lg` (1024 px). Anything CS
 
 | Concern | How it is handled |
 |---|---|
-| **Read-only safety** | Pool opened with `default_transaction_read_only=on`; an integration test confirms writes are rejected |
+| **Read-only safety** | Pool opened with `default_transaction_read_only=on`, so Postgres itself rejects writes |
 | **Time zone** | Connections run in UTC, windows are inclusive whole days |
 | **Timeouts** | 10 s statement timeout, 5 s header read, 15 s response write, 10 s graceful shutdown; Redis dial, read and write 250 ms with no retries |
 | **Errors** | RFC 7807-style problem bodies; internals are logged, never returned |
@@ -775,53 +775,38 @@ REDIS_URL=redis://localhost:6379 make dev
 
 ## Testing
 
-There are six kinds of tests. Run the first two with nothing but Go and Node installed; the others need the services listed in the table.
+There are four kinds of tests. The Go and web tests need nothing but Go and Node; the end-to-end and k6 tests need the services listed in the table.
 
 | Kind | What it checks | Needs | Command |
 |---|---|---|---|
-| **Go unit** | Business rules, use cases, request parsing, JSON field names, error bodies, config, the layering rules between packages | nothing | `make test-api` |
-| **Go integration** | The SQL against real Pagila (totals match the `sales_by_store` view and raw SQL), the whole HTTP stack, the pool being read-only, and the Redis cache against a real Redis | Pagila, Redis | `make test-api-integration` |
-| **Web unit and integration** | Components, hooks, URL and filter handling, the API client, and the whole app against a fake API: filters, URL, errors and Retry, Reset, browser Back, 404 | nothing | `make test-web` |
+| **Go** | Business rules, use cases, request parsing, JSON field names, error bodies, the Redis cache (against an in-memory Redis), config, and the layering rules between packages | nothing | `make test-api` |
+| **Web** | Components, hooks, URL and filter handling, the API client, and the layering rules between folders | nothing | `make test-web` |
 | **End to end** | A real browser on the real stack: figures match the API, filters, Back, Reset, errors, the chart tooltip, and a phone-sized screen | Pagila, Chromium | `make e2e` |
 | **API load (k6)** | Every endpoint answers correctly and fast; response times under 20 users | Pagila, k6, a running API | `make k6-smoke`, `make k6-load` |
-| **Coverage** | The tests above leave no important code untested | as above | `make cover-api`, `make cover-web` |
 
-`make test` runs the Go and web tests together, and `make check` adds lint, typecheck and build. If Pagila or Redis is not running, the Go integration tests **skip** rather than fail.
+`make test` runs the Go and web tests together, and `make check` adds lint, typecheck and build. `make cover-api` and `make cover-web` run the same tests and fail when coverage drops below the floors described below.
 
 ### Go tests
 
 ```sh
-make test-api                                  # everything; integration tests skip if services are down
+make test-api                                  # everything
 cd api && go test ./internal/analytics/domain  # one package
 cd api && go test -run TestKPIs ./...          # tests by name
+make cover-api                                 # tests plus the coverage floors
 ```
 
-For the full run with real services (a missing service fails the run instead of skipping):
-
-```sh
-REDIS_PORT=6380 make redis-up                  # Redis for the tests; Pagila must be on localhost:5432
-make test-api-integration                      # real Pagila and Redis, with the race detector
-make cover-api                                 # the same, plus the coverage floors
-```
-
-The coverage floors are 90% for the `domain` and `app` packages and 80% for every other package (the `cmd/api` entry point and the test helper are not counted). A package below its floor fails the run.
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `TEST_DATABASE_URL` | `postgres://postgres:123456@localhost:5432/postgres` | The Pagila the integration tests read. They never write to it |
-| `TEST_REDIS_URL` | `redis://localhost:6380/15` | The Redis for the cache tests. Database 15, so real cache keys are never touched; the tests delete the keys they create |
-| `REQUIRE_DB` | unset | If set, a missing Pagila or Redis fails the tests instead of skipping them |
+The coverage floors are 90% for the `domain` and `app` packages and 80% for every other package. The `cmd/api` entry point and the two packages that only talk to Postgres (`adapters/postgres` and `platform/db`) are not counted.
 
 ### Web tests
 
 ```sh
-make test-web                                  # all unit and integration tests
+make test-web                                  # all tests
 cd web && npx vitest run src/lib              # one folder
 cd web && npx vitest                          # watch mode while you work
 make cover-web                                 # tests plus the coverage floors
 ```
 
-The integration tests (`web/src/integration`) render the real app against a fake of the API, so they need no server and no database. The coverage floors are 85% of lines and statements and 80% of functions and branches over all of `src`. `make cover-web` prints what is missing.
+The coverage floors are 85% of lines and statements and 80% of functions and branches over all of `src`. `make cover-web` prints what is missing.
 
 ### End-to-end tests
 
@@ -857,7 +842,7 @@ make k6-compare                                # the same load without and with 
 
 ### Continuous integration
 
-[ci.yml](.github/workflows/ci.yml) runs on every push to `main` and every pull request, with a real Postgres loaded with Pagila and a real Redis:
+[ci.yml](.github/workflows/ci.yml) runs on every push to `main` and every pull request. The end-to-end and k6 jobs use a real Postgres loaded with Pagila:
 
 | Job | Runs |
 |---|---|
@@ -865,5 +850,3 @@ make k6-compare                                # the same load without and with 
 | `web` | lint, typecheck, the web tests with the coverage floors, and a build |
 | `e2e` | the Playwright suite; the report and traces are attached when it fails |
 | `k6` | the k6 smoke test against a running API |
-
-A missing database or Redis fails these jobs instead of skipping tests.

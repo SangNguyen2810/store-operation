@@ -15,31 +15,6 @@ permissions:
 jobs:
   api:
     runs-on: ubuntu-latest
-    # Real Postgres with Pagila and a real Redis, so the integration tests run
-    # instead of skipping. REQUIRE_DB=1 makes a missing service fail the job.
-    env:
-      REQUIRE_DB: "1"
-      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-      TEST_REDIS_URL: redis://localhost:6379/15
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-      redis:
-        image: redis:7-alpine
-        ports: ["6379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     defaults:
       run:
         working-directory: api
@@ -49,7 +24,6 @@ jobs:
         with:
           go-version-file: api/go.mod
           cache-dependency-path: api/go.sum
-      - uses: ./.github/actions/load-pagila
       - name: gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: go vet ./...

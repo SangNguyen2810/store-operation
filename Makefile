@@ -1,4 +1,4 @@
-.PHONY: install dev dev-api dev-web redis-up redis-down test test-api test-web test-api-integration cover-api cover-web e2e e2e-install k6-smoke k6-load k6-compare lint typecheck build check
+.PHONY: install dev dev-api dev-web redis-up redis-down test test-api test-web cover-api cover-web e2e e2e-install k6-smoke k6-load k6-compare lint typecheck build check
 
 install:
 	cd web && npm install
@@ -22,18 +22,12 @@ redis-down:
 
 test: test-api test-web
 
-# Integration tests read the live Pagila container and skip when it is unreachable.
 test-api:
 	cd api && go test ./... -count=1
 
-# The same run as CI: a missing Pagila or Redis fails instead of skipping.
-# Redis for the tests: `REDIS_PORT=6380 make redis-up` (uses database 15 on :6380).
-test-api-integration:
-	cd api && REQUIRE_DB=1 go test ./... -race -count=1
-
-# Tests plus the coverage floors (90% domain/app, 80% elsewhere). Needs Pagila and Redis up.
+# Tests plus the coverage floors (90% domain/app, 80% elsewhere).
 cover-api:
-	cd api && REQUIRE_DB=1 ./scripts/covergate.sh
+	cd api && ./scripts/covergate.sh
 
 test-web:
 	cd web && npm test

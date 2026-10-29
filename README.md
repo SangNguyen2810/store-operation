@@ -780,7 +780,7 @@ There are four kinds of tests. The Go and web tests need nothing but Go and Node
 | Kind | What it checks | Needs | Command |
 |---|---|---|---|
 | **Go** | Business rules, use cases, request parsing, JSON field names, error bodies, the Redis cache (against an in-memory Redis), config, and the layering rules between packages | nothing | `make test-api` |
-| **Web** | Components, hooks, URL and filter handling, the API client, and the layering rules between folders | nothing | `make test-web` |
+| **Web** | Components, hooks, URL and filter handling, the API client, the layering rules between folders, and the whole app against a fake API: filters, URL, errors and Retry, Reset, browser Back, 404 | nothing | `make test-web` |
 | **End to end** | A real browser on the real stack: figures match the API, filters, Back, Reset, errors, the chart tooltip, and a phone-sized screen | Pagila, Chromium | `make e2e` |
 | **API load (k6)** | Every endpoint answers correctly and fast; response times under 20 users | Pagila, k6, a running API | `make k6-smoke`, `make k6-load` |
 
@@ -806,7 +806,7 @@ cd web && npx vitest                          # watch mode while you work
 make cover-web                                 # tests plus the coverage floors
 ```
 
-The coverage floors are 85% of lines and statements and 80% of functions and branches over all of `src`. `make cover-web` prints what is missing.
+The integration tests (`web/src/integration`) render the real app against a fake of the API, so they need no server and no database. The coverage floors are 85% of lines and statements and 80% of functions and branches over all of `src`. `make cover-web` prints what is missing.
 
 ### End-to-end tests
 

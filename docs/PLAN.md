@@ -2,7 +2,7 @@
 
 A portfolio project for a Principal Frontend Engineer interview (React/Vue role), built on the Pagila DVD-rental database. It is meant to be walked through on screen as a code sample, so the plan favours clear structure and explainable trade-offs over feature count.
 
-**Status:** Phase 1 is built, verified, and published to GitHub with a CI workflow. Before the gateway, a testing push is under way (section 11): Go unit and integration tests are done (CI now has Pagila and Redis), and the web unit tests, coverage gate, integration tests and Playwright end-to-end tests and k6 are done. The testing push is complete. Phase 2 is now an API gateway plus a Redis cache (section 10): the cache is built, the gateway is not started. The full microservices split is not started.
+**Status:** Phase 1 is built, verified, and published to GitHub with a CI workflow. A testing push came before the gateway (section 11) and is complete: Go unit tests (the backend integration tests were later removed), web unit and integration tests with a coverage gate, Playwright end-to-end tests, and k6. Phase 2, an API gateway plus a Redis cache (section 10), is done: the cache is in the API and the gateway is its own service in `gateway/`, with Docker images and a compose stack for the whole system. The full microservices split (one binary per context, separate databases) is not started.
 
 ---
 
@@ -10,7 +10,7 @@ A portfolio project for a Principal Frontend Engineer interview (React/Vue role)
 
 - Show frontend architecture, design choices and problem solving in a code review setting.
 - Only 1-2 core frontend features at a time.
-- Backend in Go, as simple HTTP servers. No saga, no Redis, no events. Start with one deployable and 1-2 packages, split into microservices later.
+- Backend in Go, as simple HTTP servers. No saga, no events. Started with one deployable and 1-2 packages; a Redis cache and a separate gateway service came in phase 2, and a full microservices split is still later.
 - Pagila is **read-only**. The dashboard must never write to it, and everything lives in the `dashboard/` folder.
 - Frontend stack: React + TypeScript + Vite + Tailwind CSS v4 + TanStack Query.
 
@@ -60,21 +60,21 @@ A portfolio project for a Principal Frontend Engineer interview (React/Vue role)
 
 Shared params: `from`, `to` (YYYY-MM-DD, inclusive, max 366 days), `store`; `granularity` for revenue. Defaults are the 30 days ending at the as-of date. Bad input returns an RFC 7807-style `400`. Internal errors never leak details.
 
-### Phase 2 (in progress: cache built, gateway not started): gateway and Redis cache
-- A gateway in front of the API (routing, access log, per-IP rate limit, timeouts) and a Redis cache for the heavy analytics queries, added as seams without changing the use cases. Details, decisions and acceptance criteria are in section 10.
+### Phase 2 (done): gateway and Redis cache
+- A gateway in front of the API (routing, access log, per-IP rate limit, timeouts) and a Redis cache for the heavy analytics queries, added as seams without changing the use cases. The gateway is a separate service with its own module and Docker image. Details, decisions and acceptance criteria are in section 10.
 
 ### Later (not started): microservices
-Turn each context into its own `cmd/<service>` binary with its own pool, then split the database. The gateway comes first, in phase 2 (section 10). See the README for the seam.
+Turn each context into its own `cmd/<service>` binary with its own pool, then split the database. The gateway is already its own service, built in phase 2 (section 10). See the README for the seam.
 
 ### Out of scope
-Auth, Docker images for the app (Redis alone runs in Docker, section 10), Kubernetes, load balancing and TLS at the gateway, returns and late-fee handling, customer-facing site.
+Auth, Kubernetes, load balancing and TLS at the gateway, returns and late-fee handling, customer-facing site.
 
 ---
 
 ## 3. Architecture
 
 ```
-api/                                 Go, one go.mod
+api/                                 Go module 1 of 2: the analytics API (also has a Dockerfile)
   cmd/api/                           composition root: config, pool, mux, graceful shutdown
   internal/
     analytics/                       one bounded context, hexagonal inside
@@ -91,7 +91,12 @@ api/                                 Go, one go.mod
       config/                        environment settings
       httpx/                         JSON and problem responses, request logging, /healthz, /api/meta
     archtest/                        test that enforces the import rules below
-web/                                 React 19 + TypeScript (strict) + Vite + Tailwind CSS v4
+gateway/                             Go module 2 of 2: its own go.mod, Dockerfile and tests; standard library only
+  cmd/gateway/                       composition root: config, server, graceful shutdown
+  internal/gateway/                  proxy, request id, access log, per-IP rate limiter, 429/502/504 problem responses
+  internal/config/                   environment settings
+  internal/archtest/                 fails if the gateway imports anything but the standard library
+web/                                 React 19 + TypeScript (strict) + Vite + Tailwind CSS v4 (Dockerfile + nginx.conf serve it)
   src/routes.tsx                     route table: / is the dashboard, * is the 404 page
   src/pages/                         thin route-level screens (HomePage, NotFoundPage)
   src/features/overview/             container: OverviewPage calls the hooks and maps data to props (kpis.ts, films.ts, OverviewFilters)
@@ -101,7 +106,7 @@ web/                                 React 19 + TypeScript (strict) + Vite + Tai
   src/api/  src/lib/                 typed client; dates, format, filters, useBreakpoint
   src/index.css                      Tailwind import, colour tokens (light/dark), small base layer; no component rules
   src/archtest.test.ts               enforces the front-end import rules
-Makefile, .env.example, README.md, docs/PLAN.md, .github/workflows/ci.yml
+Makefile, docker-compose.yml, .env.example, README.md, docs/PLAN.md, loadtest/, .github/workflows/ci.yml
 ```
 
 ### Backend layering (hexagonal, one context per module)
@@ -255,7 +260,7 @@ Notes:
 
 ## 10. Planned: gateway and Redis cache
 
-**Progress:** Phase A (Redis cache) is built and verified, not yet committed. Phase B (gateway) and Phase C (measure and document) are not started.
+**Progress:** Phases A, B and C are done. The gateway was built as a separate service (own Go module, Docker images, compose stack), which changed the plan below; see "Phase B and C result".
 
 **Goal.** Show system-architecture skills on the existing app: an edge gateway and a cache, each added at a seam so the use cases and handlers do not change.
 
@@ -276,12 +281,12 @@ Notes:
 | Stampede | `singleflight` per key | One cold key causes one Postgres query, however many requests arrive together |
 | Failure | Fail open: a Redis error is logged and the request is served from Postgres | The cache must never be a reason the API is down |
 | Switch | Cache is off when `REDIS_URL` is unset (the default) | Tests, CI and `make dev` without Redis behave as today |
-| Gateway | New `cmd/gateway` and `internal/gateway`, built on the standard library `httputil.ReverseProxy` | No framework; the gateway is a context of its own and imports only `platform` |
+| Gateway | **Changed during the build:** a separate Go module in `gateway/` (`cmd/gateway`, `internal/gateway`), built on the standard library `httputil.ReverseProxy`, with its own Dockerfile | No framework. A separate module means it shares no code with the API and imports only the standard library (a small problem writer is duplicated on purpose). It was first planned as a package inside the API module |
 | Gateway features | Routing (`/api/*` and `/healthz` to analytics); access log with method, path, status, duration, client IP and request id (the id is passed upstream in `X-Request-Id`); per-IP token-bucket rate limit returning a 429 problem response with `Retry-After`; server timeouts and upstream dial and response-header timeouts returning 502 or 504 problem responses | The four features requested |
 | Not in the gateway | Auth, load balancing, TLS, caching, retries | Out of scope; one upstream only |
 | Rate-limit key | The connection's remote IP; `X-Forwarded-For` is not trusted | Nothing sits in front of the gateway. Idle limiter entries are evicted so memory stays bounded |
 | Ports | Gateway on `:8080`, so the web dev proxy is unchanged; analytics moves to `:8081` via `ADDR` | The browser only ever talks to the gateway |
-| Docker | `docker-compose.yml` at the repo root runs Redis only (`redis:7-alpine`, bound to localhost:6379). Pagila keeps its own compose in its own repo | Docker images for the apps stay out of scope |
+| Docker | **Changed during the build:** `docker-compose.yml` runs Redis, the API, the gateway and the web app (nginx, which proxies `/api` to the gateway). Only the gateway (8080) and web (3000) ports are published, plus Redis. Pagila keeps its own compose in its own repo and the API reaches it through `host.docker.internal` | The gateway was asked to be its own service started by Docker, so images for the apps moved into scope |
 
 ### Phases
 
@@ -301,17 +306,25 @@ Each phase ships and is verified on its own; stop for a go-ahead after each.
 - Deviations: the generic cache logic was first written inside the analytics adapter, then moved to `platform/cache` at your request (all tests and the end-to-end check were repeated after the move). `go get` first raised the module to Go 1.26; the dependencies were pinned instead (`go-redis` v9.14.0, `miniredis` v2.35.0, `x/sync` v0.17.0) so `go.mod` stays at Go 1.25.0 and CI is unaffected. Port 6379 was taken by a local `redis-server` on the machine, so the Docker host port became configurable.
 - Not done in this phase: the log line shows hit, miss or coalesced per query, but there are no counters or metrics endpoint.
 
-**Phase B: Gateway**
-- `internal/gateway` (proxy, request id, access log, rate limiter, error responses) and `cmd/gateway`; Makefile runs Redis, analytics, gateway and web; config for ports and limits.
+**Phase B: Gateway (done, built as a separate service; see "Phase B and C result")**
+- `gateway/` module (proxy, request id, access log, rate limiter, error responses) and `cmd/gateway`; Dockerfiles and compose for all services; Makefile runs the API, gateway and web; config for ports and limits.
 - Tests with `httptest` upstreams: routing, request id passed upstream, access log fields, 429 with `Retry-After`, 504 on a slow upstream, 502 on a dead upstream, and limiter eviction.
 - Verify: `go test ./...`, then through the gateway every endpoint returns the same JSON as calling analytics directly, and the web app works unchanged.
 
-**Phase C: Measure and document**
+**Phase C: Measure and document (done)**
 - Point the existing k6 scripts (section 11, Phase F) at the gateway with `BASE_URL`, compare with the direct numbers, and record them in the README.
 - README: updated architecture diagram, configuration table, key decisions, and the limits (static data, one upstream). Update this plan and `.env.example`.
 - CI already has Redis and Pagila services (section 11, Phase B); the gateway needs nothing more for its own tests.
 
-### Acceptance criteria (draft, confirm before Phase A)
+**Phase B and C result**
+- Changed from the plan: the gateway is its own Go module in `gateway/` (standard library only, no code shared with `api/`; a small problem writer is duplicated on purpose), and Docker images for the apps are now in scope. `docker-compose.yml` runs Redis, the API (:8081), the gateway (:8080) and the web app (nginx, :3000). The API default port moved to :8081.
+- Built: proxy with routing, `X-Request-Id`, access log, per-IP token bucket with eviction, 429/502/504 problem responses; the API logs the request id; Makefile, e2e, k6 and CI (`gateway` and `docker` jobs) updated.
+- Verified: 13 paths byte-identical through the gateway and directly (status, body, content type), also through the nginx container with the cache on; 502 with the API stopped; 429 with `Retry-After`; e2e 11/11 and k6 smoke 30/30 through the gateway; six deliberate breakages in the gateway, five caught, one equivalent.
+- Measured (`make k6-compare`, one laptop run, 20 users): no cache avg 8.5 ms / p95 22.0; cache 1.8 / 3.6; cache through the gateway 2.0 / 4.0. The gateway costs about 0.2 ms per request.
+- Found: at the default limit (50 requests/s per IP) the k6 load test is rate limited (1,342 of about 6,900 checks failed with 429s, latency unaffected). The limit is working as designed; load tests through the gateway run it with `RATE_LIMIT_RPS=0`. In the Docker stack all browsers share the web container's IP, so they share one bucket.
+- Not done: the CI `gateway`, `docker` and updated `k6` jobs have not run on GitHub; the nginx container was checked with curl, not a browser.
+
+### Acceptance criteria (all met; see the results above)
 
 1. Through the gateway the web app works unchanged, and every response is byte-identical to today's.
 2. With `REDIS_URL` set, a repeated identical request is served from Redis and Postgres is queried once, shown by a test and a log line.
@@ -321,14 +334,14 @@ Each phase ships and is verified on its own; stop for a go-ahead after each.
 6. With `REDIS_URL` unset, behaviour is exactly as today.
 7. The gateway writes one access-log line per request with method, path, status, duration, client IP and request id, and passes the request id upstream.
 8. Exceeding the rate limit returns a 429 problem response with `Retry-After`; a slow upstream returns a 504 and a dead upstream a 502.
-9. The architecture test still passes, `gateway` imports only `platform`, and CI stays green.
+9. The architecture test still passes, the gateway imports only the standard library (its own architecture test), and CI stays green (not yet run on GitHub).
 10. The README reports the measured cold and warm times honestly, and says the data is static.
 
 ### Risks
 
 - Caching a 19 ms read-only workload adds a moving part. This is a demonstration, and the README says so.
 - The cached JSON is coupled to the domain type shapes; the key version prefix is the guard.
-- `make dev` now runs four things (Redis, analytics, gateway, web), so failures are harder to read; the access log and request id are there to help.
+- `make dev` now runs three processes (API, gateway, web), and `make up` four containers plus Redis, so failures are harder to read; the access log and request id are there to help.
 - New dependencies: `go-redis/v9` (runtime) and `miniredis` (tests only).
 
 ---
@@ -397,7 +410,7 @@ Each phase ships and is verified on its own; stop for a go-ahead after each.
 
 ## 12. Next steps, in order
 
-1. Push and check the first CI run on GitHub (four jobs: api, web, e2e, k6) and fix what fails.
+1. Push and check the first CI run on GitHub (six jobs: api, gateway, docker, web, e2e, k6) and fix what fails.
 2. (done) The testing work in section 11.
-3. Phase 2: gateway and Redis cache (section 10): build Phase B and C.
+3. (done) Phase 2: gateway and Redis cache (section 10).
 4. Later: splitting the packages into binaries and databases.

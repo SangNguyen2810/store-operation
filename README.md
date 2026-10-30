@@ -17,7 +17,7 @@
 
 ## Overview
 
-Store Operations Dashboard gives staff a single page to answer three questions: *how is the business doing, how does each store compare, and what is earning the most?* It is built on the [Pagila](https://github.com/devrimgunduz/pagila) sample database, a Go API and a React frontend.
+Store Operations Dashboard gives staff a single page to answer three questions: *how is the business doing, how does each store compare, and what is earning the most?* It is built on the [Pagila](https://github.com/devrimgunduz/pagila) sample database, a Go API behind a small Go gateway, and a React frontend.
 
 **Highlights**
 
@@ -28,6 +28,7 @@ Store Operations Dashboard gives staff a single page to answer three questions: 
 - **Shareable views.** Every filter lives in the URL. Reload or send the link and you get the same view.
 - **Resilient by design.** Each section loads, empties and fails on its own, with retry. One failing query never takes down the page.
 - **Read-only.** The app adds no tables, views, indexes or migrations. Its database connections are opened with `default_transaction_read_only=on`.
+- **Gateway in front.** A separate service that routes requests, tags each with an id, logs them, rate-limits each client and times out slow upstreams.
 - **Optional Redis cache.** Set `REDIS_URL` and the heavy queries are served from Redis within a TTL, with identical responses. If Redis is down the API keeps working from Postgres.
 
 ## Quick start
@@ -39,7 +40,16 @@ make install   # install web dependencies
 make dev       # API on :8081, gateway on :8080, web on :5173
 ```
 
-Open <http://localhost:5173>.
+Open <http://localhost:5173>. The browser talks to the gateway on `:8080`, which forwards to the API on `:8081`.
+
+**Or run everything in Docker** (Redis with the cache on, the API, the gateway and the web app), with Pagila still running on `localhost:5432`:
+
+```sh
+make up        # builds the images and starts the stack
+make down      # stops it
+```
+
+Open <http://localhost:3000>. The API container reaches Pagila on the host; set `DOCKER_DATABASE_URL` if yours is elsewhere. `GATEWAY_PORT` and `WEB_PORT` change the published ports (defaults 8080 and 3000).
 
 | Command | What it does |
 |---|---|
@@ -66,11 +76,22 @@ All settings are environment variables and all are optional. See [.env.example](
 | `REDIS_URL` | *(unset)* | Turns the query cache on, for example `redis://localhost:6379`. Unset means no cache |
 | `CACHE_TTL` | `10m` | How long a cached query result stays valid |
 
+The gateway has its own settings:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ADDR` | `:8080` | Gateway listen address |
+| `UPSTREAM_URL` | `http://localhost:8081` | The API to forward to |
+| `RATE_LIMIT_RPS` | `50` | Requests per second allowed for each client IP. `0` turns the limit off |
+| `RATE_LIMIT_BURST` | `100` | How many requests a client can make at once before the limit applies |
+| `UPSTREAM_DIAL_TIMEOUT` | `2s` | How long to wait to connect to the API |
+| `UPSTREAM_HEADER_TIMEOUT` | `10s` | How long to wait for the API to start answering |
+
 Pagila's payments end on 2022-07-27, so "the last 30 days" needs a fixed anchor. The API exposes it at `GET /api/meta` and the UI reads it from there, so there is one source of truth.
 
 ## API reference
 
-A small read-only JSON API. Every endpoint is `GET`, needs no authentication, and never changes data. The examples below are real responses from the Pagila sample data (the as-of date is 2022-07-27) and run against the default `http://localhost:8080`.
+A small read-only JSON API. Every endpoint is `GET`, needs no authentication, and never changes data. The examples below are real responses from the Pagila sample data (the as-of date is 2022-07-27) and run against the default `http://localhost:8080`, which is the [gateway](#gateway). The gateway forwards these routes to the API itself on `:8081` and changes nothing in the answers.
 
 | Endpoint | What it returns |
 |---|---|
@@ -99,6 +120,10 @@ A small read-only JSON API. Every endpoint is `GET`, needs no authentication, an
 **Store attribution.** Money and rentals are attributed to a store through `payment → rental → inventory.store_id`, the same rule as Pagila's `sales_by_store` view. Only stores 1 and 2 hold inventory. An unknown store id is not an error: it simply matches nothing, so figures are 0 and lists are empty.
 
 **Numbers.** Amounts are plain numbers rounded to two decimals (the web app formats them as USD). Percentages are plain numbers too, so `-2.43` means -2.43%.
+
+**Request id.** Every response carries an `X-Request-Id` header, set by the gateway. Send your own (up to 64 letters, digits, `.`, `_` or `-`) and it is kept; otherwise one is generated. The same id appears in the gateway's and the API's logs.
+
+**Rate limit.** Each client address may make `RATE_LIMIT_RPS` requests per second (50 by default) with a burst of `RATE_LIMIT_BURST` (100). Beyond that the gateway answers `429` until a token is free; see [Errors](#errors).
 
 **Caching.** With `REDIS_URL` set, the figures behind `/api/kpis`, `/api/revenue` and `/api/top/films` can be up to `CACHE_TTL` (10 minutes by default) old. The responses are byte-identical to the uncached ones, and there is no cache header. `/api/stores`, `/api/meta` and `/healthz` are never cached. The data is static (as-of 2022), so staleness is not visible here; live data would need short TTLs or explicit invalidation.
 
@@ -288,8 +313,13 @@ Bad input and server failures return a body in the [RFC 7807](https://www.rfc-ed
 | `400` | `limit` is outside 1 to 50 | `limit: want 1..50` |
 | `500` | A query failed | `internal error`. The real cause is logged on the server and never returned |
 | `503` | `/healthz` cannot reach the database | `database unreachable` |
+| `429` | The gateway's per-client rate limit is exceeded. The `Retry-After` header says how many seconds to wait | `rate limit exceeded` |
+| `502` | The gateway cannot reach the API | `upstream unavailable` |
+| `504` | The API did not start answering within `UPSTREAM_HEADER_TIMEOUT` (10 s) | `upstream timed out` |
 
-Two cases come from Go's router, not from the API, so their bodies are plain text rather than problem JSON: `405 Method Not Allowed` for any method other than `GET` (the `Allow` header lists what is accepted), and `404 Not Found` for an unknown path.
+The `429`, `502` and `504` rows come from the gateway; the rest come from the API and pass through the gateway unchanged.
+
+Two cases come from Go's router, not from the app, so their bodies are plain text rather than problem JSON: `405 Method Not Allowed` for any method other than `GET` (the `Allow` header lists what is accepted), and `404 Not Found` for an unknown path. The gateway only forwards `/api/*` and `/healthz`, so a path outside those gets the gateway's own plain-text `404` and an unknown path under `/api/` gets the API's.
 
 ## Database
 
@@ -500,7 +530,10 @@ flowchart LR
     subgraph browser [Browser]
         web["web<br/>React 19 · TypeScript · Vite<br/>Tailwind CSS · TanStack Query"]
     end
-    subgraph server [Go API · one deployable]
+    subgraph edge [Go gateway · separate service]
+        gateway["cmd/gateway<br/>routing · request id · access log<br/>rate limit · timeouts"]
+    end
+    subgraph server [Go API · separate service]
         direction TB
         api["cmd/api<br/>composition root"]
         analytics["analytics context<br/>domain · app · adapters"]
@@ -509,17 +542,19 @@ flowchart LR
         api --> platform
         analytics --> platform
     end
-    web -- "JSON over /api/*" --> api
+    web -- "JSON over /api/*" --> gateway
+    gateway -- "reverse proxy" --> api
     analytics -- "pgx · read-only pool" --> pg[("Pagila<br/>PostgreSQL 17")]
     analytics -. "optional cache · REDIS_URL" .-> redis[("Redis")]
 ```
 
-**Four ideas hold the design together:**
+**Five ideas hold the design together:**
 
 1. **Hexagonal inside, contexts outside.** Each business area is a bounded context with a pure domain, use cases that talk to ports, and adapters that plug the ports into the world.
 2. **Dependencies point inward, and a test enforces it.** Layers and contexts cannot reach around each other without failing CI.
 3. **The database is only ever read.** No tables, views, indexes or migrations are added, and the pool refuses writes.
 4. **Every screen section stands alone.** Loading, empty and error are handled per section, and filters live in the URL, so any view can be shared.
+5. **The gateway is its own service.** It is a separate Go module that knows nothing about analytics and imports only the standard library (a test enforces it), so it can be run, scaled and replaced on its own.
 
 ### Backend: hexagonal contexts
 
@@ -562,8 +597,16 @@ flowchart LR
 
 The arrows show who **calls** whom, which is not who imports whom. `app` defines the `Repo` interface and calls it, but `app` never imports `adapters/postgres`. The adapter does not need `app` to work: Go interfaces are satisfied implicitly, so it only needs methods with matching signatures, written in `domain` types. It imports `app` for one line only, `var _ app.Repo = (*Repo)(nil)`, a compile-time check that a drifting signature fails in the adapter's own file instead of at the wiring. The dependency points inward, which is the allowed direction, and `app` knows nothing about SQL. That is what keeps SQL out of the core, and it is checked: the architecture test fails if `app` imports anything but `domain`. `cmd/api` is still the only file that wires both sides together. It builds the pieces once at startup and plugs them together, and it is not in the path of a request.
 
+The repository holds two Go services, each its own module, plus the web app:
+
 ```
-api/
+gateway/                         the edge service: its own go.mod, Dockerfile, tests
+  cmd/gateway/                   composition root: config, server, graceful shutdown
+  internal/
+    gateway/                     proxy, request id, access log, per-IP rate limiter, 429/502/504 problems
+    config/                      environment settings
+    archtest/                    fails if the gateway imports anything but the standard library
+api/                             the analytics service
   cmd/api/                       composition root: builds the pool, wires contexts, serves HTTP
   internal/
     analytics/                   one context
@@ -577,6 +620,9 @@ api/
       db/  rdb/  cache/          read-only pool, Redis client, read-through cache (Redis, TTL, shared lookups)
       config/  httpx/            env config, JSON/problem/logging/health
     archtest/                    enforces the import rules below
+web/                             React app; Dockerfile and nginx.conf serve it and proxy /api to the gateway
+loadtest/                        k6 scripts and the cache and gateway comparison
+docker-compose.yml               Redis, API, gateway and web
 ```
 
 **Where does it go?**
@@ -590,6 +636,7 @@ api/
 | How caching works (Redis, TTL, shared lookups, failing open) | `platform/cache/` |
 | A route, a query parameter, or the JSON shape | `adapters/http/` |
 | Timeouts, logging, error format, the DB pool | `platform/` |
+| Routing, rate limit, request id or access log at the edge | `gateway/internal/gateway/` |
 | Which pieces are wired together | `cmd/api/main.go` |
 
 **Import rules** (checked on every `go test ./...` by `internal/archtest`):
@@ -603,9 +650,11 @@ api/
 | a context | itself and `platform`, never another context |
 | `cmd` | anything (composition root) |
 
+The gateway lives in its own module and cannot import the API's packages at all. Its own architecture test allows only the standard library and its own packages, and fails if the API is mentioned.
+
 ### Request lifecycle
 
-What happens on `GET /api/kpis?from=2022-06-28&to=2022-07-27&store=1`:
+What happens on `GET /api/kpis?from=2022-06-28&to=2022-07-27&store=1`. The gateway adds an `X-Request-Id`, logs the request, applies the rate limit and forwards it (see [Gateway](#gateway)); the diagram starts at the API:
 
 ```mermaid
 sequenceDiagram
@@ -751,9 +800,9 @@ Mobile-first with two breakpoints, `sm` (640 px) and `lg` (1024 px). Anything CS
 |---|---|
 | **Read-only safety** | Pool opened with `default_transaction_read_only=on`, so Postgres itself rejects writes |
 | **Time zone** | Connections run in UTC, windows are inclusive whole days |
-| **Timeouts** | 10 s statement timeout, 5 s header read, 15 s response write, 10 s graceful shutdown; Redis dial, read and write 250 ms with no retries |
+| **Timeouts** | API: 10 s statement timeout, 5 s header read, 15 s response write, 10 s graceful shutdown; Redis dial, read and write 250 ms with no retries. Gateway: 2 s to connect to the API, 10 s for it to start answering, 20 s response write |
 | **Errors** | RFC 7807-style problem bodies; internals are logged, never returned |
-| **Observability** | Structured `slog` request logs with method, path, query and duration; a `cache` log line per lookup (`hit`, `miss`, `coalesced`) when the cache is on; `/healthz` pings the database, not Redis |
+| **Observability** | Structured `slog` request logs with method, path, query and duration, and the gateway's `request_id` when there is one (the gateway also logs status and client IP); a `cache` log line per lookup (`hit`, `miss`, `coalesced`) when the cache is on; `/healthz` pings the database, not Redis |
 | **Caching** | Optional read-through Redis cache on `Totals`, `Revenue` and `TopFilms`; `CACHE_TTL` (10 min), no invalidation because the data is static; identical lookups share one query; fails open when Redis is down |
 | **Accessibility** | Keyboard-reachable controls, deltas shown by arrow and text (not colour alone), chart text alternative and table view |
 | **Performance** | Chart library lazy-loaded; first load is about 95 kB gzipped; previous data stays up while new filters load |
@@ -774,18 +823,63 @@ REDIS_URL=redis://localhost:6379 make dev
 - **What to expect.** One heavy query takes about 20 ms on this dataset, so a single user will not notice. Under load it matters more: in a local run with 20 simulated users (`make k6-compare`), the average response time dropped from about 7.9 ms to 1.7 ms and the p95 from about 20 ms to 3.6 ms. That is an indication from one laptop, not a benchmark.
 - **Logs.** With the cache on, each lookup logs a `cache` line with the outcome `hit`, `miss` or `coalesced`.
 
+## Gateway
+
+The gateway is the only thing the browser talks to. It is a separate service in `gateway/` (its own Go module, image and tests) built on the standard library's reverse proxy.
+
+- **Routing.** `/api/*` and `/healthz` go to the API. Anything else is a 404 from the gateway itself. Responses from the API pass through untouched: the same status, headers and body as calling the API directly.
+- **Request id.** Every request gets an `X-Request-Id` (16 random hex characters, or the client's own if it is short and made of letters, digits, `.`, `_` and `-`). It is sent to the API, returned to the client, and written in both services' logs, so one request can be followed across them.
+- **Access log.** One line per request with method, path, query, status, duration, client IP and request id, including the requests the gateway rejects.
+- **Rate limit.** A token bucket for each client IP: `RATE_LIMIT_RPS` requests per second with a burst of `RATE_LIMIT_BURST`. Over the limit the gateway answers `429` with a `Retry-After` header. Idle clients are forgotten, so memory stays bounded.
+- **Timeouts.** If the API does not answer in time the gateway returns `504`; if it cannot be reached, `502`. Both are problem responses like the API's own errors.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as browser
+    participant G as gateway
+    participant A as API
+
+    B->>G: GET /api/kpis
+    G->>G: X-Request-Id: keep a safe one or make one
+    G->>G: rate limit for this client IP
+    alt over the limit
+        G-->>B: 429 problem + Retry-After
+    else allowed
+        G->>A: forward, with X-Request-Id
+        alt answers in time
+            A-->>G: response
+            G-->>B: the same response + X-Request-Id
+        else not reachable
+            G-->>B: 502 problem
+        else too slow
+            G-->>B: 504 problem
+        end
+    end
+    G->>G: access log line (also for 429, 502 and 504)
+```
+
+What it does not do: authentication, load balancing (one API only), TLS, caching or retries.
+
+**Limits to know about**
+
+- The client IP is the address the connection came from. `X-Forwarded-For` is ignored, because nothing trusted sits in front of the gateway and the header would let a client choose its own bucket. In the Docker stack the web container is in front of the gateway, so all browsers there share one bucket of 50 requests per second.
+- A single page load makes about five requests, so normal use is far under the limit. A load test is not normal use: 20 simulated users from one machine go over it. Run the gateway with `RATE_LIMIT_RPS=0` for `make k6-load`.
+
+**What it costs.** In a local `make k6-compare` run with 20 simulated users, the cached API averaged 1.8 ms with a p95 of 3.6 ms when called directly, and 2.0 ms with a p95 of 4.0 ms through the gateway (rate limit off): about 0.2 ms more per request. One laptop, one run: an indication, not a benchmark.
+
 ## Testing
 
 There are four kinds of tests. The Go and web tests need nothing but Go and Node; the end-to-end and k6 tests need the services listed in the table.
 
 | Kind | What it checks | Needs | Command |
 |---|---|---|---|
-| **Go** | Business rules, use cases, request parsing, JSON field names, error bodies, the Redis cache (against an in-memory Redis), config, and the layering rules between packages | nothing | `make test-api` |
+| **Go** | API: business rules, use cases, request parsing, JSON field names, error bodies, the Redis cache (against an in-memory Redis), config, and the layering rules between packages. Gateway: routing, request ids, the access log, the rate limit, 502 and 504, and that it imports only the standard library | nothing | `make test-api`, `make test-gateway` |
 | **Web** | Components, hooks, URL and filter handling, the API client, the layering rules between folders, and the whole app against a fake API: filters, URL, errors and Retry, Reset, browser Back, 404 | nothing | `make test-web` |
 | **End to end** | A real browser on the real stack: figures match the API, filters, Back, Reset, errors, the chart tooltip, and a phone-sized screen | Pagila, Chromium | `make e2e` |
 | **API load (k6)** | Every endpoint answers correctly and fast; response times under 20 users | Pagila, k6, a running API | `make k6-smoke`, `make k6-load` |
 
-`make test` runs the Go and web tests together, and `make check` adds lint, typecheck and build. `make cover-api` and `make cover-web` run the same tests and fail when coverage drops below the floors described below.
+`make test` runs the Go (both services) and web tests together, and `make check` adds lint, typecheck and build. `make cover-api`, `make cover-gateway` and `make cover-web` run the same tests and fail when coverage drops below the floors described below.
 
 ### Go tests
 
@@ -794,9 +888,11 @@ make test-api                                  # everything
 cd api && go test ./internal/analytics/domain  # one package
 cd api && go test -run TestKPIs ./...          # tests by name
 make cover-api                                 # tests plus the coverage floors
+make test-gateway                              # the gateway's tests
+make cover-gateway                             # the gateway with its coverage floor (80%)
 ```
 
-The coverage floors are 90% for the `domain` and `app` packages and 80% for every other package. The `cmd/api` entry point and the two packages that only talk to Postgres (`adapters/postgres` and `platform/db`) are not counted.
+The coverage floors are 90% for the `domain` and `app` packages and 80% for every other package. The gateway's floor is 80%. The `cmd/api` and `cmd/gateway` entry points and the two packages that only talk to Postgres (`adapters/postgres` and `platform/db`) are not counted.
 
 ### Web tests
 
@@ -811,7 +907,7 @@ The integration tests (`web/src/integration`) render the real app against a fake
 
 ### End-to-end tests
 
-The end-to-end tests drive a real Chromium against the production web build, the Go API and your Pagila. They start their own API on `:8181`, gateway on `:8180` and the web build on `:4173`, so `make dev` can keep running.
+The end-to-end tests drive a real Chromium against the production web build, the gateway, the Go API and your Pagila. They start their own API on `:8181`, gateway on `:8180` (rate limit off) and the web build on `:4173`, so `make dev` can keep running.
 
 ```sh
 make e2e-install        # once: downloads Chromium
@@ -830,16 +926,18 @@ Set `E2E_DATABASE_URL` if your Pagila is not at the default address. A failing r
 
 ### API load tests (k6)
 
-Install [k6](https://k6.io) once (`brew install k6`), and have an API running (`make dev-api` or `make dev`).
+Install [k6](https://k6.io) once (`brew install k6`), and have the API and gateway running (`make dev`; or `make dev-api` and `make dev-gateway`).
 
 ```sh
 make k6-smoke                                  # one user, every endpoint, answers checked (about a second)
 make k6-load                                   # ramps to 20 users for about 45 seconds
-BASE_URL=http://localhost:9000 make k6-load    # test an API at another address
-make k6-compare                                # the same load without and with the Redis cache
+BASE_URL=http://localhost:8081 make k6-load    # straight to the API, skipping the gateway
+make k6-compare                                # the same load without and with the Redis cache, and through the gateway
 ```
 
-`make k6-smoke` fails if any answer has the wrong status, content type or shape. `make k6-load` fails if the p95 response time is over 200 ms (250 ms for a single endpoint) or more than 1% of requests fail. `make k6-compare` starts two APIs of its own, so it needs Redis running (`REDIS_PORT=6380 make redis-up`) and prints a table of response times with and without the cache. More detail is in [loadtest/README.md](loadtest/README.md).
+The tests go to the gateway on `:8080` by default. `make k6-load` sends more requests per second from one address than the gateway's default limit allows, so start the gateway with the limit off: `RATE_LIMIT_RPS=0 make dev-gateway`.
+
+`make k6-smoke` fails if any answer has the wrong status, content type or shape. `make k6-load` fails if the p95 response time is over 200 ms (250 ms for a single endpoint) or more than 1% of requests fail. `make k6-compare` starts its own APIs and a gateway, so it needs Redis running (`REDIS_PORT=6380 make redis-up`), and prints a table of response times without the cache, with it, and with it through the gateway. More detail is in [loadtest/README.md](loadtest/README.md).
 
 ### Continuous integration
 
@@ -848,6 +946,8 @@ make k6-compare                                # the same load without and with 
 | Job | Runs |
 |---|---|
 | `api` | `gofmt`, `go vet`, the Go tests with the coverage floors, the Go tests again with the race detector, and a build |
+| `gateway` | `gofmt`, `go vet`, the gateway tests with the coverage floor, the race detector, and a build |
+| `docker` | builds the images for the whole stack |
 | `web` | lint, typecheck, the web tests with the coverage floors, and a build |
 | `e2e` | the Playwright suite; the report and traces are attached when it fails |
-| `k6` | the k6 smoke test against a running API |
+| `k6` | the k6 smoke test against a running API and gateway |

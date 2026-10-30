@@ -29,10 +29,16 @@ func Meta(asOf time.Time) http.HandlerFunc {
 	}
 }
 
+// LogRequests writes one line per request. When a gateway in front sent an
+// X-Request-Id, the line carries it, so one request can be followed across services.
 func LogRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
-		slog.Info("request", "method", r.Method, "path", r.URL.Path, "query", r.URL.RawQuery, "dur", time.Since(start))
+		attrs := []any{"method", r.Method, "path", r.URL.Path, "query", r.URL.RawQuery, "dur", time.Since(start)}
+		if id := r.Header.Get("X-Request-Id"); id != "" {
+			attrs = append(attrs, "request_id", id)
+		}
+		slog.Info("request", attrs...)
 	})
 }

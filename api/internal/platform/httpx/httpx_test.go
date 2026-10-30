@@ -98,6 +98,24 @@ func TestLogRequests(t *testing.T) {
 	}
 }
 
+func TestLogRequestsCarriesTheRequestID(t *testing.T) {
+	buf := captureLogs(t)
+	h := httpx.LogRequests(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/kpis", nil)
+	req.Header.Set("X-Request-Id", "abc123")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if !strings.Contains(buf.String(), "request_id=abc123") {
+		t.Errorf("log %q missing the request id", buf)
+	}
+
+	buf.Reset()
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/kpis", nil))
+	if strings.Contains(buf.String(), "request_id") {
+		t.Errorf("no id was sent, so none should be logged: %q", buf)
+	}
+}
+
 func TestWriteJSON(t *testing.T) {
 	rec := httptest.NewRecorder()
 	httpx.WriteJSON(rec, http.StatusCreated, map[string]int{"a": 1})

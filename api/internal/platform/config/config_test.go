@@ -18,7 +18,7 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Addr != ":8080" || cfg.RedisURL != "" || cfg.CacheTTL != 10*time.Minute {
+	if cfg.Addr != ":8081" || cfg.RedisURL != "" || cfg.CacheTTL != 10*time.Minute {
 		t.Errorf("defaults = %+v", cfg)
 	}
 	if got := cfg.AsOf.Format(dateLayout); got != "2022-07-27" {

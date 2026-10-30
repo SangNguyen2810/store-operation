@@ -1,8 +1,9 @@
 import { defineConfig, devices } from '@playwright/test'
 
 // The real stack, on ports of its own so it never collides with `make dev`:
-// Pagila (already running) <- Go API :8180 <- the production web build served by `vite preview` :4173.
-const API_PORT = 8180
+// Pagila (already running) <- Go API :8181 <- gateway :8180 <- the production web build served by `vite preview` :4173.
+const API_PORT = 8181
+const GATEWAY_PORT = 8180
 const WEB_PORT = 4173
 const DATABASE_URL = process.env.E2E_DATABASE_URL ?? 'postgres://postgres:123456@localhost:5432/postgres'
 
@@ -29,8 +30,17 @@ export default defineConfig({
       timeout: 120_000,
     },
     {
+      command: 'go run ./cmd/gateway',
+      cwd: '../gateway',
+      // The limit is covered by the gateway's own tests; parallel browser tests share one client IP.
+      env: { ADDR: `:${GATEWAY_PORT}`, UPSTREAM_URL: `http://localhost:${API_PORT}`, RATE_LIMIT_RPS: '0' },
+      url: `http://localhost:${GATEWAY_PORT}/healthz`,
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    {
       command: `npm run build && npx vite preview --port ${WEB_PORT} --strictPort`,
-      env: { API_PROXY: `http://localhost:${API_PORT}` },
+      env: { API_PROXY: `http://localhost:${GATEWAY_PORT}` },
       url: `http://localhost:${WEB_PORT}`,
       reuseExistingServer: false,
       timeout: 180_000,

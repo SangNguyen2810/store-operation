@@ -32,6 +32,32 @@ jobs:
       - run: go test ./... -race -count=1
       - run: go build -o bin/api ./cmd/api
 
+  gateway:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway/go.mod
+          cache: false
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - name: Tests and coverage gate
+        run: ./scripts/covergate.sh
+      - run: go test ./... -race -count=1
+      - run: go build -o bin/gateway ./cmd/gateway
+
+  docker:
+    runs-on: ubuntu-latest
+    # Builds the four-service stack, so a broken Dockerfile or compose file fails here.
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose build
+
   web:
     runs-on: ubuntu-latest
     defaults:
@@ -96,7 +122,7 @@ jobs:
 
   k6:
     runs-on: ubuntu-latest
-    # The k6 smoke test against a real API and Pagila. The load test is not run here: runner timings are too noisy for a latency threshold.
+    # The k6 smoke test through the gateway to a real API and Pagila. The load test is not run here: runner timings are too noisy for a latency threshold.
     services:
       postgres:
         image: postgres:17
@@ -116,13 +142,14 @@ jobs:
           go-version-file: api/go.mod
           cache-dependency-path: api/go.sum
       - uses: grafana/setup-k6-action@v1
-      - name: Start the API
-        working-directory: api
+      - name: Start the API and the gateway
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
         run: |
-          go build -o bin/api ./cmd/api
-          ./bin/api > api.log 2>&1 &
+          (cd api && go build -o bin/api ./cmd/api)
+          (cd gateway && go build -o bin/gateway ./cmd/gateway)
+          ./api/bin/api > api.log 2>&1 &
+          ./gateway/bin/gateway > gateway.log 2>&1 &
           for _ in $(seq 50); do curl -sf localhost:8080/healthz && exit 0; sleep 0.2; done
-          cat api.log; exit 1
+          cat api.log gateway.log; exit 1
       - run: k6 run loadtest/smoke.js

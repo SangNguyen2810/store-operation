@@ -36,20 +36,21 @@ Store Operations Dashboard gives staff a single page to answer three questions: 
 
 ```sh
 make install   # install web dependencies
-make dev       # API on :8080, web on :5173
+make dev       # API on :8081, gateway on :8080, web on :5173
 ```
 
 Open <http://localhost:5173>.
 
 | Command | What it does |
 |---|---|
-| `make dev` | Runs the API and the web dev server together |
+| `make dev` | Runs the API, the gateway and the web dev server together |
+| `make up` / `make down` | Builds and starts, or stops, the whole stack in Docker (Redis, API, gateway, web) at <http://localhost:3000> |
 | `make test` | Runs the Go and web tests (see [Testing](#testing) for all kinds of tests) |
 | `make lint` | `gofmt`, `go vet`, and `oxlint` |
 | `make typecheck` | TypeScript project build check |
 | `make build` | Builds the API binary and the production web bundle |
 | `make check` | Lint, typecheck, test and build |
-| `make redis-up` / `make redis-down` | Starts or stops Redis in Docker for the optional [query cache](#query-cache) |
+| `make redis-up` / `make redis-down` | Starts or stops just Redis in Docker for the optional [query cache](#query-cache) |
 
 **Optional query cache.** Set `REDIS_URL` to serve the heavy queries from Redis; see [Query cache](#query-cache).
 
@@ -59,7 +60,7 @@ All settings are environment variables and all are optional. See [.env.example](
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ADDR` | `:8080` | API listen address |
+| `ADDR` | `:8081` | API listen address (the gateway listens on `:8080`) |
 | `DATABASE_URL` | `postgres://postgres:123456@localhost:5432/postgres` | Pagila connection string |
 | `ASOF_DATE` | `2022-07-27` | The "today" for default date ranges |
 | `REDIS_URL` | *(unset)* | Turns the query cache on, for example `redis://localhost:6379`. Unset means no cache |
@@ -810,7 +811,7 @@ The integration tests (`web/src/integration`) render the real app against a fake
 
 ### End-to-end tests
 
-The end-to-end tests drive a real Chromium against the production web build, the Go API and your Pagila. They start their own API on `:8180` and the web build on `:4173`, so `make dev` can keep running.
+The end-to-end tests drive a real Chromium against the production web build, the Go API and your Pagila. They start their own API on `:8181`, gateway on `:8180` and the web build on `:4173`, so `make dev` can keep running.
 
 ```sh
 make e2e-install        # once: downloads Chromium

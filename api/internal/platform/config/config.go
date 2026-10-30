@@ -23,7 +23,7 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		Addr:        env("ADDR", ":8080"),
+		Addr:        env("ADDR", ":8081"),
 		DatabaseURL: env("DATABASE_URL", "postgres://postgres:123456@localhost:5432/postgres"),
 		RedisURL:    env("REDIS_URL", ""),
 	}

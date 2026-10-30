@@ -1,6 +1,6 @@
 import { expect, type APIRequestContext, type Page } from '@playwright/test'
 
-/** The API the app talks to through the preview proxy; specs read it for the expected figures. */
+/** The gateway the app talks to through the preview proxy; specs read it for the expected figures. */
 export const API = 'http://localhost:8180'
 
 interface Metric {

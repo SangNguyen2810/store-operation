@@ -2,7 +2,7 @@
 
 A portfolio project for a Principal Frontend Engineer interview (React/Vue role), built on the Pagila DVD-rental database. It is meant to be walked through on screen as a code sample, so the plan favours clear structure and explainable trade-offs over feature count.
 
-**Status:** Phase 1 is built, verified, and published to GitHub with a CI workflow. A testing push came before the gateway (section 11) and is complete: Go unit tests (the backend integration tests were later removed), web unit and integration tests with a coverage gate, Playwright end-to-end tests, and k6. Phase 2, an API gateway plus a Redis cache (section 10), is done: the cache is in the API and the gateway is its own service in `gateway/`, with Docker images and a compose stack for the whole system. The full microservices split (one binary per context, separate databases) is not started.
+**Status:** Phase 1 is built, verified, and published to GitHub with a CI workflow. A testing push came before the gateway (section 11) and is complete: Go unit tests (the backend integration tests were later removed), web unit and integration tests with a coverage gate, Playwright end-to-end tests, and k6. Phase 2, an API gateway plus a Redis cache (section 10), is done: the cache is in the API and the gateway is its own service in `gateway/`, with Docker images and a compose stack for the whole system. The repository was then restructured into a monorepo (section 13): `app/` for the services, `shared/` for the Go library they use, `infra/` for Docker, and one CI workflow per piece. The full microservices split (one binary per context, separate databases) is not started.
 
 ---
 
@@ -74,7 +74,7 @@ Auth, Kubernetes, load balancing and TLS at the gateway, returns and late-fee ha
 ## 3. Architecture
 
 ```
-api/                                 Go module 1 of 2: the analytics API (also has a Dockerfile)
+api/                                 (now app/api, see section 13) Go module: the analytics API, with a Dockerfile
   cmd/api/                           composition root: config, pool, mux, graceful shutdown
   internal/
     analytics/                       one bounded context, hexagonal inside
@@ -410,7 +410,41 @@ Each phase ships and is verified on its own; stop for a go-ahead after each.
 
 ## 12. Next steps, in order
 
-1. Push and check the first CI run on GitHub (six jobs: api, gateway, docker, web, e2e, k6) and fix what fails.
+1. Push and check the first CI run on GitHub (five workflows: api, gateway, shared, web, stack, with e2e, k6 and docker jobs in stack) and fix what fails.
 2. (done) The testing work in section 11.
 3. (done) Phase 2: gateway and Redis cache (section 10).
 4. Later: splitting the packages into binaries and databases.
+
+---
+
+## 13. Done: restructure into a monorepo
+
+**Request.** Put `api`, `gateway` and `web` in an `app` folder, take the Redis code out of the API into a shared folder, and shape the repo like a big-tech microservice monorepo.
+
+**Layout (the paths in sections 3 to 12 predate it).**
+
+```
+app/api  app/gateway  app/web   the deployable services
+shared/                         Go module: cache (read-through Redis cache) and rdb (Redis client)
+infra/                          docker-compose.yml (Redis, API, gateway, web)
+loadtest/  docs/  Makefile  .env.example  .github/
+```
+
+**Decisions**
+
+| Area | Decision | Why |
+|---|---|---|
+| What is shared | Only `cache` and `rdb`, moved from `api/internal/platform`. `httpx`, `config` and `db` stay in the API | They are the only generic parts with a likely second user. Moving `httpx` now would leave two styles beside the gateway's own problem writer |
+| What stays in the API | `analytics/adapters/cache`: which queries are cached and how keys are built | A business decision, not plumbing |
+| Redis the server | `infra/docker-compose.yml`, a deployed dependency | A cache service of our own would add a network hop to a 1 ms lookup. The client library is shared; the server is infrastructure |
+| Gateway | Still imports nothing from `shared/` or the API; its test now rejects both | Services must stay independently replaceable |
+| Module paths | Renamed to match the folders: `.../app/api`, `.../app/gateway`, `.../shared`. The API reaches `shared` through a `replace` directive, so it builds the same locally, in Docker and in CI without a `go.work` | One path scheme, no workspace file to keep in sync |
+| Dependencies | Versions stay pinned (go-redis 9.14.0, miniredis 2.35.0, x/sync 0.17.0) and `go.mod` stays at Go 1.25.0 | `go mod tidy` otherwise raises Go to 1.26 |
+| API image | Built from the repository root (`app/api/Dockerfile`, with a `Dockerfile.dockerignore`) so `shared/` is in the build context | The only service with a dependency outside its folder |
+| CI | `ci.yml` split into `api.yml`, `gateway.yml`, `shared.yml`, `web.yml` and `stack.yml`, each with path filters. `api.yml` also watches `shared/**` | A change to one service builds only that service, as in a large monorepo. Jobs that need several services (docker, e2e, k6) run whenever any of them changes |
+
+**Result**
+- Moves were done with `git mv`, so file history follows the files.
+- Verified: `make check` (lint, typecheck, all tests, build); coverage gates for api (6 packages), gateway (2), shared (2) and web (98.96% statements, 100% branches); e2e 11/11; the Docker stack built from `infra/` with all four containers healthy; 16 cold and warm responses byte-identical to the standalone API; `make k6-compare` (cache with gateway 2.2 ms average against 1.9 ms direct).
+- Architecture tests: the API's no longer list `platform/cache` and `platform/rdb`; the cache adapter may import `shared/cache`; `shared` has a test that fails if it imports a service; the gateway's test rejects both the API and `shared`.
+- Not done: the five new workflows have not run on GitHub, so the path filters and the `shared` replace directive in CI are untested there. Files under `docs/` other than this section still use the old paths.

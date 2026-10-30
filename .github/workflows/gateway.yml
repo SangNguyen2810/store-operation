@@ -1,0 +1,35 @@
+name: Gateway
+
+on:
+  push:
+    branches: [main]
+    paths: ['app/gateway/**', '.github/workflows/gateway.yml']
+  pull_request:
+    paths: ['app/gateway/**', '.github/workflows/gateway.yml']
+
+concurrency:
+  group: gateway-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app/gateway/go.mod
+          cache: false
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - name: Tests and coverage gate
+        run: ./scripts/covergate.sh
+      - run: go test ./... -race -count=1
+      - run: go build -o bin/gateway ./cmd/gateway

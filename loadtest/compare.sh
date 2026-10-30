@@ -13,8 +13,8 @@ pids=()
 cleanup() { for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null || true; done; rm -rf "$out"; }
 trap cleanup EXIT
 
-(cd api && go build -o "$out/api" ./cmd/api)
-(cd gateway && go build -o "$out/gateway" ./cmd/gateway)
+(cd app/api && go build -o "$out/api" ./cmd/api)
+(cd app/gateway && go build -o "$out/gateway" ./cmd/gateway)
 
 start() { # port, redis url or empty
   ADDR=":$1" REDIS_URL="$2" "$out/api" >"$out/api-$1.log" 2>&1 &
@@ -24,7 +24,7 @@ start() { # port, redis url or empty
 }
 
 # Start from a cold cache so the first requests miss.
-redis-cli -u "$REDIS_URL" flushdb >/dev/null 2>&1 || docker compose exec -T redis redis-cli -n 13 flushdb >/dev/null
+redis-cli -u "$REDIS_URL" flushdb >/dev/null 2>&1 || docker compose -f infra/docker-compose.yml exec -T redis redis-cli -n 13 flushdb >/dev/null
 
 start 8191 ""
 start 8192 "$REDIS_URL"

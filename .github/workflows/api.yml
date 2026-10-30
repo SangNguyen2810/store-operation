@@ -1,0 +1,35 @@
+name: API
+
+on:
+  push:
+    branches: [main]
+    paths: ['app/api/**', 'shared/**', '.github/workflows/api.yml']
+  pull_request:
+    paths: ['app/api/**', 'shared/**', '.github/workflows/api.yml']
+
+concurrency:
+  group: api-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app/api/go.mod
+          cache-dependency-path: app/api/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - name: Tests and coverage gate
+        run: ./scripts/covergate.sh
+      - run: go test ./... -race -count=1
+      - run: go build -o bin/api ./cmd/api

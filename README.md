@@ -6,7 +6,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/SangNguyen2810/store-operation/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/SangNguyen2810/store-operation/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/SangNguyen2810/store-operation/actions/workflows/api.yml"><img alt="API" src="https://github.com/SangNguyen2810/store-operation/actions/workflows/api.yml/badge.svg"></a>
+  <a href="https://github.com/SangNguyen2810/store-operation/actions/workflows/gateway.yml"><img alt="Gateway" src="https://github.com/SangNguyen2810/store-operation/actions/workflows/gateway.yml/badge.svg"></a>
+  <a href="https://github.com/SangNguyen2810/store-operation/actions/workflows/web.yml"><img alt="Web" src="https://github.com/SangNguyen2810/store-operation/actions/workflows/web.yml/badge.svg"></a>
+  <a href="https://github.com/SangNguyen2810/store-operation/actions/workflows/stack.yml"><img alt="Stack" src="https://github.com/SangNguyen2810/store-operation/actions/workflows/stack.yml/badge.svg"></a>
   <img alt="Go" src="https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white">
   <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black">
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white">
@@ -60,7 +63,7 @@ Open <http://localhost:3000>. The API container reaches Pagila on the host; set 
 | `make typecheck` | TypeScript project build check |
 | `make build` | Builds the API binary and the production web bundle |
 | `make check` | Lint, typecheck, test and build |
-| `make redis-up` / `make redis-down` | Starts or stops just Redis in Docker for the optional [query cache](#query-cache) |
+| `make redis-up` / `make redis-down` | Starts or stops just Redis in Docker (compose file: `infra/docker-compose.yml`) for the optional [query cache](#query-cache) |
 
 **Optional query cache.** Set `REDIS_URL` to serve the heavy queries from Redis; see [Query cache](#query-cache).
 
@@ -537,24 +540,29 @@ flowchart LR
         direction TB
         api["cmd/api<br/>composition root"]
         analytics["analytics context<br/>domain · app · adapters"]
-        platform["platform<br/>db · rdb · cache · config · httpx"]
+        platform["platform<br/>db · config · httpx"]
         api --> analytics
         api --> platform
         analytics --> platform
     end
+    subgraph lib [shared Go module]
+        shared["shared<br/>cache · rdb"]
+    end
     web -- "JSON over /api/*" --> gateway
     gateway -- "reverse proxy" --> api
     analytics -- "pgx · read-only pool" --> pg[("Pagila<br/>PostgreSQL 17")]
-    analytics -. "optional cache · REDIS_URL" .-> redis[("Redis")]
+    analytics -. "uses" .-> shared
+    shared -. "optional cache · REDIS_URL" .-> redis[("Redis")]
 ```
 
-**Five ideas hold the design together:**
+**Six ideas hold the design together:**
 
 1. **Hexagonal inside, contexts outside.** Each business area is a bounded context with a pure domain, use cases that talk to ports, and adapters that plug the ports into the world.
 2. **Dependencies point inward, and a test enforces it.** Layers and contexts cannot reach around each other without failing CI.
 3. **The database is only ever read.** No tables, views, indexes or migrations are added, and the pool refuses writes.
 4. **Every screen section stands alone.** Loading, empty and error are handled per section, and filters live in the URL, so any view can be shared.
 5. **The gateway is its own service.** It is a separate Go module that knows nothing about analytics and imports only the standard library (a test enforces it), so it can be run, scaled and replaced on its own.
+6. **Shared code is a library, not a service.** `shared/` holds the generic Redis client and read-through cache, in a Go module of its own. A service imports it; it never imports a service (a test enforces it). What to cache stays in the API, because that is a business decision.
 
 ### Backend: hexagonal contexts
 
@@ -597,16 +605,31 @@ flowchart LR
 
 The arrows show who **calls** whom, which is not who imports whom. `app` defines the `Repo` interface and calls it, but `app` never imports `adapters/postgres`. The adapter does not need `app` to work: Go interfaces are satisfied implicitly, so it only needs methods with matching signatures, written in `domain` types. It imports `app` for one line only, `var _ app.Repo = (*Repo)(nil)`, a compile-time check that a drifting signature fails in the adapter's own file instead of at the wiring. The dependency points inward, which is the allowed direction, and `app` knows nothing about SQL. That is what keeps SQL out of the core, and it is checked: the architecture test fails if `app` imports anything but `domain`. `cmd/api` is still the only file that wires both sides together. It builds the pieces once at startup and plugs them together, and it is not in the path of a request.
 
-The repository holds two Go services, each its own module, plus the web app:
+The repository is a monorepo of independent pieces. Each service has its own module (or `package.json`), Dockerfile and tests, and its own CI workflow that runs only when it changes:
 
 ```
-gateway/                         the edge service: its own go.mod, Dockerfile, tests
+app/                             the deployable services
+  api/                           analytics service (Go module)
+  gateway/                       edge service (Go module, standard library only)
+  web/                           React app; its Dockerfile and nginx.conf serve it and proxy /api to the gateway
+shared/                          Go module used by services: the Redis client and read-through cache
+infra/                           docker-compose.yml: Redis, API, gateway and web
+loadtest/                        k6 scripts and the cache and gateway comparison
+docs/  Makefile  .env.example    notes, commands and settings for the whole repo
+.github/                         one workflow per service, plus one for the cross-service jobs
+```
+
+Inside the services:
+
+```
+app/gateway/
   cmd/gateway/                   composition root: config, server, graceful shutdown
   internal/
     gateway/                     proxy, request id, access log, per-IP rate limiter, 429/502/504 problems
     config/                      environment settings
     archtest/                    fails if the gateway imports anything but the standard library
-api/                             the analytics service
+
+app/api/
   cmd/api/                       composition root: builds the pool, wires contexts, serves HTTP
   internal/
     analytics/                   one context
@@ -616,13 +639,15 @@ api/                             the analytics service
         postgres/                driven adapter: implements Repo, owns all SQL
         cache/                   driven adapter: implements Repo in front of another Repo; picks what to cache and the keys
         http/                    driving adapter: routes, validation, response types
-    platform/                    shared plumbing that knows no context
-      db/  rdb/  cache/          read-only pool, Redis client, read-through cache (Redis, TTL, shared lookups)
+    platform/                    plumbing that knows no context
+      db/                        read-only pool
       config/  httpx/            env config, JSON/problem/logging/health
     archtest/                    enforces the import rules below
-web/                             React app; Dockerfile and nginx.conf serve it and proxy /api to the gateway
-loadtest/                        k6 scripts and the cache and gateway comparison
-docker-compose.yml               Redis, API, gateway and web
+
+shared/
+  cache/                         read-through cache: Redis, TTL, shared lookups, failing open
+  rdb/                           Redis client with short timeouts and no retries
+  archtest/                      fails if shared code imports a service
 ```
 
 **Where does it go?**
@@ -633,10 +658,10 @@ docker-compose.yml               Redis, API, gateway and web
 | What the system can do (a new question it can answer) | `app/` |
 | A query, or how Pagila tables are read | `adapters/postgres/` |
 | What is cached, or how a query's key is built | `adapters/cache/` |
-| How caching works (Redis, TTL, shared lookups, failing open) | `platform/cache/` |
+| How caching works (Redis, TTL, shared lookups, failing open) | `shared/cache/` |
 | A route, a query parameter, or the JSON shape | `adapters/http/` |
 | Timeouts, logging, error format, the DB pool | `platform/` |
-| Routing, rate limit, request id or access log at the edge | `gateway/internal/gateway/` |
+| Routing, rate limit, request id or access log at the edge | `app/gateway/internal/gateway/` |
 | Which pieces are wired together | `cmd/api/main.go` |
 
 **Import rules** (checked on every `go test ./...` by `internal/archtest`):
@@ -645,12 +670,12 @@ docker-compose.yml               Redis, API, gateway and web
 |---|---|
 | `domain` | standard library |
 | `app` | standard library, its own `domain` |
-| `adapters/*` | its own `domain` and `app`, `platform`, third-party. Never another adapter |
+| `adapters/*` | its own `domain` and `app`, `platform`, third-party (including the `shared` module). Never another adapter |
 | `platform` | no context |
 | a context | itself and `platform`, never another context |
 | `cmd` | anything (composition root) |
 
-The gateway lives in its own module and cannot import the API's packages at all. Its own architecture test allows only the standard library and its own packages, and fails if the API is mentioned.
+The gateway lives in its own module and cannot import the API's packages at all. Its own architecture test allows only the standard library and its own packages, and fails if the API or `shared` is mentioned. `shared` has no context rules, but its test fails if it imports any service.
 
 ### Request lifecycle
 
@@ -825,7 +850,7 @@ REDIS_URL=redis://localhost:6379 make dev
 
 ## Gateway
 
-The gateway is the only thing the browser talks to. It is a separate service in `gateway/` (its own Go module, image and tests) built on the standard library's reverse proxy.
+The gateway is the only thing the browser talks to. It is a separate service in `app/gateway/` (its own Go module, image and tests) built on the standard library's reverse proxy.
 
 - **Routing.** `/api/*` and `/healthz` go to the API. Anything else is a 404 from the gateway itself. Responses from the API pass through untouched: the same status, headers and body as calling the API directly.
 - **Request id.** Every request gets an `X-Request-Id` (16 random hex characters, or the client's own if it is short and made of letters, digits, `.`, `_` and `-`). It is sent to the API, returned to the client, and written in both services' logs, so one request can be followed across them.
@@ -874,36 +899,38 @@ There are four kinds of tests. The Go and web tests need nothing but Go and Node
 
 | Kind | What it checks | Needs | Command |
 |---|---|---|---|
-| **Go** | API: business rules, use cases, request parsing, JSON field names, error bodies, the Redis cache (against an in-memory Redis), config, and the layering rules between packages. Gateway: routing, request ids, the access log, the rate limit, 502 and 504, and that it imports only the standard library | nothing | `make test-api`, `make test-gateway` |
+| **Go** | API: business rules, use cases, request parsing, JSON field names, error bodies, the Redis cache (against an in-memory Redis), config, and the layering rules between packages. Gateway: routing, request ids, the access log, the rate limit, 502 and 504, and that it imports only the standard library. Shared: the Redis cache and client | nothing | `make test-api`, `make test-gateway`, `make test-shared` |
 | **Web** | Components, hooks, URL and filter handling, the API client, the layering rules between folders, and the whole app against a fake API: filters, URL, errors and Retry, Reset, browser Back, 404 | nothing | `make test-web` |
 | **End to end** | A real browser on the real stack: figures match the API, filters, Back, Reset, errors, the chart tooltip, and a phone-sized screen | Pagila, Chromium | `make e2e` |
 | **API load (k6)** | Every endpoint answers correctly and fast; response times under 20 users | Pagila, k6, a running API | `make k6-smoke`, `make k6-load` |
 
-`make test` runs the Go (both services) and web tests together, and `make check` adds lint, typecheck and build. `make cover-api`, `make cover-gateway` and `make cover-web` run the same tests and fail when coverage drops below the floors described below.
+`make test` runs the Go (both services and `shared`) and web tests together, and `make check` adds lint, typecheck and build. `make cover-api`, `make cover-gateway`, `make cover-shared` and `make cover-web` run the same tests and fail when coverage drops below the floors described below.
 
 ### Go tests
 
 ```sh
 make test-api                                  # everything
-cd api && go test ./internal/analytics/domain  # one package
-cd api && go test -run TestKPIs ./...          # tests by name
+cd app/api && go test ./internal/analytics/domain  # one package
+cd app/api && go test -run TestKPIs ./...          # tests by name
 make cover-api                                 # tests plus the coverage floors
 make test-gateway                              # the gateway's tests
 make cover-gateway                             # the gateway with its coverage floor (80%)
+make test-shared                               # the shared module's tests
+make cover-shared                              # the shared module with its coverage floor (80%)
 ```
 
-The coverage floors are 90% for the `domain` and `app` packages and 80% for every other package. The gateway's floor is 80%. The `cmd/api` and `cmd/gateway` entry points and the two packages that only talk to Postgres (`adapters/postgres` and `platform/db`) are not counted.
+The coverage floors are 90% for the `domain` and `app` packages and 80% for every other package. The gateway's and `shared`'s floor is 80%. The `cmd/api` and `cmd/gateway` entry points and the two packages that only talk to Postgres (`adapters/postgres` and `platform/db`) are not counted.
 
 ### Web tests
 
 ```sh
 make test-web                                  # all tests
-cd web && npx vitest run src/lib              # one folder
-cd web && npx vitest                          # watch mode while you work
+cd app/web && npx vitest run src/lib              # one folder
+cd app/web && npx vitest                          # watch mode while you work
 make cover-web                                 # tests plus the coverage floors
 ```
 
-The integration tests (`web/src/integration`) render the real app against a fake of the API, so they need no server and no database. The coverage floors are 85% of lines and statements and 80% of functions and branches over all of `src`. `make cover-web` prints what is missing.
+The integration tests (`app/web/src/integration`) render the real app against a fake of the API, so they need no server and no database. The coverage floors are 85% of lines and statements and 80% of functions and branches over all of `src`. `make cover-web` prints what is missing.
 
 ### End-to-end tests
 
@@ -915,14 +942,14 @@ make e2e                # runs the suite (about 10 seconds)
 ```
 
 ```sh
-cd web
+cd app/web
 npx playwright test -g "store filter"   # one test, by name
 npx playwright test --ui                # watch it run, step through it
 npx playwright test --headed            # show the browser
 npx playwright show-report              # open the report after a failure
 ```
 
-Set `E2E_DATABASE_URL` if your Pagila is not at the default address. A failing run leaves a screenshot and a trace in `web/test-results`; open a trace with `npx playwright show-trace <file>`.
+Set `E2E_DATABASE_URL` if your Pagila is not at the default address. A failing run leaves a screenshot and a trace in `app/web/test-results`; open a trace with `npx playwright show-trace <file>`.
 
 ### API load tests (k6)
 
@@ -941,13 +968,14 @@ The tests go to the gateway on `:8080` by default. `make k6-load` sends more req
 
 ### Continuous integration
 
-[ci.yml](.github/workflows/ci.yml) runs on every push to `main` and every pull request. The end-to-end and k6 jobs use a real Postgres loaded with Pagila:
+Each piece has its own workflow in [.github/workflows](.github/workflows), triggered by a push to `main` or a pull request that touches that piece's folder, so a change to the web app does not rebuild the API. `api.yml` also runs when `shared/` changes, because the API depends on it. `stack.yml` runs whenever anything under `app/`, `shared/`, `infra/` or `loadtest/` changes, because its jobs need several services together. The end-to-end and k6 jobs use a real Postgres loaded with Pagila:
 
-| Job | Runs |
+| Workflow: job | Runs |
 |---|---|
-| `api` | `gofmt`, `go vet`, the Go tests with the coverage floors, the Go tests again with the race detector, and a build |
-| `gateway` | `gofmt`, `go vet`, the gateway tests with the coverage floor, the race detector, and a build |
-| `docker` | builds the images for the whole stack |
-| `web` | lint, typecheck, the web tests with the coverage floors, and a build |
-| `e2e` | the Playwright suite; the report and traces are attached when it fails |
-| `k6` | the k6 smoke test against a running API and gateway |
+| `api.yml`: `api` | `gofmt`, `go vet`, the Go tests with the coverage floors, the Go tests again with the race detector, and a build |
+| `gateway.yml`: `gateway` | `gofmt`, `go vet`, the gateway tests with the coverage floor, the race detector, and a build |
+| `shared.yml`: `shared` | `gofmt`, `go vet`, the shared tests with the coverage floor, and the race detector |
+| `web.yml`: `web` | lint, typecheck, the web tests with the coverage floors, and a build |
+| `stack.yml`: `docker` | builds the images for the whole stack |
+| `stack.yml`: `e2e` | the Playwright suite; the report and traces are attached when it fails |
+| `stack.yml`: `k6` | the k6 smoke test against a running API and gateway |

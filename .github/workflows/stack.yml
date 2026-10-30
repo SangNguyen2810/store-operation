@@ -1,0 +1,101 @@
+name: Stack
+
+on:
+  push:
+    branches: [main]
+    paths: ['app/**', 'shared/**', 'infra/**', 'loadtest/**', '.github/actions/**', '.github/workflows/stack.yml']
+  pull_request:
+    paths: ['app/**', 'shared/**', 'infra/**', 'loadtest/**', '.github/actions/**', '.github/workflows/stack.yml']
+
+concurrency:
+  group: stack-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# Jobs that need more than one service, so they run whenever any of them changes.
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    # Builds the four-service stack, so a broken Dockerfile or compose file fails here.
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose -f infra/docker-compose.yml build
+
+  e2e:
+    runs-on: ubuntu-latest
+    # The real stack in a real browser: Pagila <- Go API <- gateway <- the production web build.
+    env:
+      E2E_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: app/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/load-pagila
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app/api/go.mod
+          cache-dependency-path: app/api/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/web/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            app/web/playwright-report
+            app/web/test-results
+          retention-days: 7
+
+  k6:
+    runs-on: ubuntu-latest
+    # The k6 smoke test through the gateway to a real API and Pagila. The load test is not run here: runner timings are too noisy for a latency threshold.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/load-pagila
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app/api/go.mod
+          cache-dependency-path: app/api/go.sum
+      - uses: grafana/setup-k6-action@v1
+      - name: Start the API and the gateway
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: |
+          (cd app/api && go build -o bin/api ./cmd/api)
+          (cd app/gateway && go build -o bin/gateway ./cmd/gateway)
+          ./app/api/bin/api > api.log 2>&1 &
+          ./app/gateway/bin/gateway > gateway.log 2>&1 &
+          for _ in $(seq 50); do curl -sf localhost:8080/healthz && exit 0; sleep 0.2; done
+          cat api.log gateway.log; exit 1
+      - run: k6 run loadtest/smoke.js

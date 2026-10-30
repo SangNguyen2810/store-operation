@@ -1,0 +1,34 @@
+name: Shared
+
+on:
+  push:
+    branches: [main]
+    paths: ['shared/**', '.github/workflows/shared.yml']
+  pull_request:
+    paths: ['shared/**', '.github/workflows/shared.yml']
+
+concurrency:
+  group: shared-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  shared:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: shared
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: shared/go.mod
+          cache-dependency-path: shared/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - name: Tests and coverage gate
+        run: ./scripts/covergate.sh
+      - run: go test ./... -race -count=1

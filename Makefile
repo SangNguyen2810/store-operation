@@ -1,6 +1,6 @@
 COMPOSE := docker compose -f infra/docker-compose.yml
 
-.PHONY: install dev dev-api dev-gateway dev-web up down redis-up redis-down test test-api test-gateway test-shared test-web cover-api cover-gateway cover-shared cover-web e2e e2e-install k6-smoke k6-load k6-compare lint typecheck build check
+.PHONY: seed-presets install dev dev-api dev-gateway dev-redis dev-web up down redis-up redis-down test test-api test-gateway test-redis test-web cover-api cover-gateway cover-redis cover-web e2e e2e-install k6-smoke k6-load k6-compare lint typecheck build check
 
 install:
 	cd app/web && npm install
@@ -15,6 +15,10 @@ dev-api:
 dev-gateway:
 	cd app/gateway && go run ./cmd/gateway
 
+# The redis service (:8082) in front of a Redis from `make redis-up`. Start the API with CACHE_URL=http://localhost:8082 to use it.
+dev-redis:
+	cd app/redis && go run ./cmd/redis
+
 dev-web:
 	cd app/web && npm run dev
 
@@ -25,14 +29,19 @@ up:
 down:
 	$(COMPOSE) down
 
-# Optional query cache: `make redis-up`, then `REDIS_URL=redis://localhost:6379 make dev`.
+# Optional query cache: `make redis-up`, then `make dev-redis` and `CACHE_URL=http://localhost:8082 make dev-api`.
 redis-up:
 	$(COMPOSE) up -d --wait redis
 
 redis-down:
 	$(COMPOSE) rm -sf redis
 
-test: test-api test-gateway test-shared test-web
+# Stores infra/presets.json as the date-range list the API offers (config:presets:v1 in Redis, no expiry).
+# The API picks it up within a minute. `redis-cli del config:presets:v1` goes back to the built-in list.
+seed-presets:
+	$(COMPOSE) exec -T redis redis-cli -x SET config:presets:v1 < infra/presets.json
+
+test: test-api test-gateway test-redis test-web
 
 test-api:
 	cd app/api && go test ./... -count=1
@@ -40,8 +49,8 @@ test-api:
 test-gateway:
 	cd app/gateway && go test ./... -count=1
 
-test-shared:
-	cd shared && go test ./... -count=1
+test-redis:
+	cd app/redis && go test ./... -count=1
 
 # Tests plus the coverage floors (90% domain/app, 80% elsewhere).
 cover-api:
@@ -51,8 +60,9 @@ cover-api:
 cover-gateway:
 	cd app/gateway && ./scripts/covergate.sh
 
-cover-shared:
-	cd shared && ./scripts/covergate.sh
+# Tests plus the coverage floor (80%).
+cover-redis:
+	cd app/redis && ./scripts/covergate.sh
 
 test-web:
 	cd app/web && npm test
@@ -84,7 +94,7 @@ k6-compare:
 lint:
 	cd app/api && gofmt -l . | (! grep .) && go vet ./...
 	cd app/gateway && gofmt -l . | (! grep .) && go vet ./...
-	cd shared && gofmt -l . | (! grep .) && go vet ./...
+	cd app/redis && gofmt -l . | (! grep .) && go vet ./...
 	cd app/web && npm run lint
 
 typecheck:
@@ -93,6 +103,7 @@ typecheck:
 build:
 	cd app/api && go build -o bin/api ./cmd/api
 	cd app/gateway && go build -o bin/gateway ./cmd/gateway
+	cd app/redis && go build -o bin/redis-service ./cmd/redis
 	cd app/web && npm run build
 
 # Lint, typecheck, the Go and web tests, and a build. CI also runs the coverage gates, e2e and k6.

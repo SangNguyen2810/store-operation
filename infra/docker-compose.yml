@@ -1,10 +1,10 @@
-# The whole stack (run from the repo root with `-f infra/docker-compose.yml`, which `make up` does): Redis, the API, the gateway and the web app. Pagila keeps its own compose file in
+# The whole stack (run from the repo root with `-f infra/docker-compose.yml`, which `make up` does): Redis, the redis service, the API, the gateway and the web app. Pagila keeps its own compose file in
 # its own repo; the API reaches it on the host (override with DOCKER_DATABASE_URL).
 #
 #   make up      builds and starts everything; the app is at http://localhost:3000
 #   make down    stops it
 #
-# `make redis-up` starts just Redis, for running the API and gateway directly with `make dev`
+# `make redis-up` starts just Redis, for running the redis service directly with `make dev-redis`
 # (REDIS_URL=redis://localhost:6379). If 6379 is taken, pick another host port:
 # `REDIS_PORT=6380 make redis-up`, and use REDIS_URL=redis://localhost:6380.
 name: store-operation
@@ -20,18 +20,33 @@ services:
       timeout: 3s
       retries: 5
 
+  # Our code in front of Redis: a small key-value HTTP API. Reachable only on the compose network.
+  redis-service:
+    build: ../app/redis
+    environment:
+      ADDR: ":8082"
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8082/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   api:
-    build:
-      context: ..
-      dockerfile: app/api/Dockerfile
+    build: ../app/api
     environment:
       ADDR: ":8081"
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgres://postgres:123456@host.docker.internal:5432/postgres}
-      REDIS_URL: redis://redis:6379
+      CACHE_URL: http://redis-service:8082
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # The API also starts without the redis service (it falls back to an in-memory copy), so this is
+    # only a start-up order.
     depends_on:
-      redis:
+      redis-service:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8081/healthz"]

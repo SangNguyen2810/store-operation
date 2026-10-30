@@ -2,7 +2,29 @@ export type Granularity = 'day' | 'week' | 'month'
 
 export interface Store {
   id: number
+  /** "City, Country" */
   label: string
+  manager: string
+  phone: string
+  address: string
+  district: string
+  postalCode: string
+  city: string
+  country: string
+  /** Items in this store's inventory. */
+  inventoryItems: number
+  activeCustomers: number
+}
+
+/** A date range the API offers. Dates are YYYY-MM-DD, both ends inclusive. */
+export interface DateRange {
+  id: string
+  label: string
+  /** The menu heading it is listed under, for example "Recent". */
+  group: string
+  from: string
+  to: string
+  default: boolean
 }
 
 export interface Metric {

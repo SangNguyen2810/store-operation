@@ -12,37 +12,38 @@ import (
 
 const (
 	dateLayout    = "2006-01-02"
-	defaultDays   = 30
-	maxRangeDays  = 366
 	defaultLimit  = 10
 	maxLimit      = 50
 	defaultGranul = domain.Day
 )
 
-// parseFilter reads from, to and store. Missing dates default to the 30 days ending at asOf.
-func parseFilter(r *http.Request, asOf time.Time) (domain.Filter, error) {
+// parseFilter reads from, to and store. The window must be one of the offered
+// ranges (GET /api/presets); with neither date it is the default range.
+func parseFilter(r *http.Request, ranges []domain.Range) (domain.Filter, error) {
 	q := r.URL.Query()
-	f := domain.Filter{To: asOf, From: asOf.AddDate(0, 0, -(defaultDays - 1))}
+	var f domain.Filter
 
-	var err error
-	if v := q.Get("to"); v != "" {
-		if f.To, err = time.Parse(dateLayout, v); err != nil {
-			return f, fmt.Errorf("to: want YYYY-MM-DD")
+	fromS, toS := q.Get("from"), q.Get("to")
+	switch {
+	case fromS == "" && toS == "":
+		def, ok := domain.DefaultRange(ranges)
+		if !ok {
+			return f, errors.New("no default range is configured")
 		}
-		if q.Get("from") == "" {
-			f.From = f.To.AddDate(0, 0, -(defaultDays - 1))
+		f.From, f.To = def.From, def.To
+	case fromS == "" || toS == "":
+		return f, errors.New("from and to must be sent together")
+	default:
+		var err error
+		if f.From, err = time.Parse(dateLayout, fromS); err != nil {
+			return f, errors.New("from: want YYYY-MM-DD")
 		}
-	}
-	if v := q.Get("from"); v != "" {
-		if f.From, err = time.Parse(dateLayout, v); err != nil {
-			return f, fmt.Errorf("from: want YYYY-MM-DD")
+		if f.To, err = time.Parse(dateLayout, toS); err != nil {
+			return f, errors.New("to: want YYYY-MM-DD")
 		}
-	}
-	if f.From.After(f.To) {
-		return f, errors.New("from must not be after to")
-	}
-	if f.To.Sub(f.From).Hours()/24 >= maxRangeDays {
-		return f, fmt.Errorf("range must not exceed %d days", maxRangeDays)
+		if _, ok := domain.FindRange(ranges, f.From, f.To); !ok {
+			return f, errors.New("from and to: not one of the offered ranges (see GET /api/presets)")
+		}
 	}
 	if v := q.Get("store"); v != "" {
 		id, err := strconv.Atoi(v)

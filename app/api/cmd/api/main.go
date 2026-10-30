@@ -13,12 +13,12 @@ import (
 	"github.com/SangNguyen2810/store-operation/app/api/internal/analytics/adapters/cache"
 	httpadapter "github.com/SangNguyen2810/store-operation/app/api/internal/analytics/adapters/http"
 	"github.com/SangNguyen2810/store-operation/app/api/internal/analytics/adapters/postgres"
+	"github.com/SangNguyen2810/store-operation/app/api/internal/analytics/adapters/ranges"
 	"github.com/SangNguyen2810/store-operation/app/api/internal/analytics/app"
+	platformcache "github.com/SangNguyen2810/store-operation/app/api/internal/platform/cache"
 	"github.com/SangNguyen2810/store-operation/app/api/internal/platform/config"
 	"github.com/SangNguyen2810/store-operation/app/api/internal/platform/db"
 	"github.com/SangNguyen2810/store-operation/app/api/internal/platform/httpx"
-	sharedcache "github.com/SangNguyen2810/store-operation/shared/cache"
-	"github.com/SangNguyen2810/store-operation/shared/rdb"
 )
 
 func main() {
@@ -43,19 +43,22 @@ func run() error {
 	defer pool.Close()
 
 	var repo app.Repo = postgres.New(pool)
-	if cfg.RedisURL != "" {
-		rc, err := rdb.Open(ctx, cfg.RedisURL)
-		if err != nil {
+	var c *platformcache.Cache
+	if cfg.CacheURL != "" {
+		if c, err = platformcache.New(cfg.CacheURL); err != nil {
 			return err
 		}
-		defer rc.Close()
-		repo = cache.New(sharedcache.New(rc, cfg.CacheTTL), repo)
-		slog.Info("cache enabled", "ttl", cfg.CacheTTL)
+		repo = cache.New(c, repo, cfg.CacheTTL)
+		slog.Info("cache enabled", "url", cfg.CacheURL, "ttl", cfg.CacheTTL)
 	}
+	// With no cache the source serves the built-in date ranges and never refreshes.
+	rangeSource := ranges.New(c)
+	rangeSource.Refresh(ctx)
+	go rangeSource.Run(ctx, ranges.RefreshEvery)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           newHandler(pool, repo, cfg.AsOf),
+		Handler:           newHandler(pool, app.NewService(repo, rangeSource, cfg.AsOf), cfg.AsOf),
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      15 * time.Second,
 	}
@@ -79,10 +82,10 @@ func run() error {
 
 // newHandler wires the HTTP surface: health, meta and the analytics routes,
 // behind request logging.
-func newHandler(db httpx.Pinger, repo app.Repo, asOf time.Time) http.Handler {
+func newHandler(db httpx.Pinger, svc *app.Service, asOf time.Time) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", httpx.Health(db))
 	mux.HandleFunc("GET /api/meta", httpx.Meta(asOf))
-	httpadapter.Register(mux, app.NewService(repo), asOf)
+	httpadapter.Register(mux, svc)
 	return httpx.LogRequests(mux)
 }

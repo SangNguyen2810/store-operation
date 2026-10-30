@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { makeStore } from '../../test/fixtures'
 import { pivotRevenue, totalRevenue } from './pivot'
 
 const points = [
@@ -10,7 +11,7 @@ const points = [
 
 describe('pivotRevenue', () => {
   it('makes one row per bucket with a column per store', () => {
-    const { rows, series } = pivotRevenue(points, [{ id: 1, label: 'Boksburg' }])
+    const { rows, series } = pivotRevenue(points, [makeStore(1, 'Boksburg')])
     expect(rows).toEqual([
       { x: '2022-07-01', s1: 10, s2: 20 },
       { x: '2022-07-02', s1: 0, s2: 5 },

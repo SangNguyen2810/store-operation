@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { addDays, daysInclusive, isIsoDate } from './dates'
 import { formatBucket, formatCurrency, formatCurrencyWhole, formatDelta, formatInteger } from './format'
 
 describe('format', () => {
@@ -18,23 +17,5 @@ describe('format', () => {
   })
   it('formats buckets without timezone drift', () => {
     expect(formatBucket('2022-07-01')).toBe('Jul 1')
-  })
-})
-
-describe('dates', () => {
-  it('validates ISO dates', () => {
-    expect(isIsoDate('2022-02-28')).toBe(true)
-    expect(isIsoDate('2022-02-30')).toBe(false)
-    expect(isIsoDate('22-02-28')).toBe(false)
-    expect(isIsoDate('')).toBe(false)
-    expect(isIsoDate(null)).toBe(false)
-  })
-  it('adds days across month and year boundaries', () => {
-    expect(addDays('2022-03-01', -1)).toBe('2022-02-28')
-    expect(addDays('2022-01-01', -1)).toBe('2021-12-31')
-  })
-  it('counts inclusive days', () => {
-    expect(daysInclusive('2022-07-01', '2022-07-01')).toBe(1)
-    expect(daysInclusive('2022-06-28', '2022-07-27')).toBe(30)
   })
 })

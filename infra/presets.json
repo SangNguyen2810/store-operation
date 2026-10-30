@@ -1,0 +1,20 @@
+[
+  {"id": "last-7", "label": "Last 7 days", "group": "Recent", "kind": "days", "days": 7},
+  {"id": "last-14", "label": "Last 14 days", "group": "Recent", "kind": "days", "days": 14},
+  {"id": "last-30", "label": "Last 30 days", "group": "Recent", "kind": "days", "days": 30, "default": true},
+  {"id": "last-60", "label": "Last 60 days", "group": "Recent", "kind": "days", "days": 60},
+  {"id": "last-90", "label": "Last 90 days", "group": "Recent", "kind": "days", "days": 90},
+  {"id": "last-180", "label": "Last 180 days", "group": "Recent", "kind": "days", "days": 180},
+  {"id": "month-to-date", "label": "Month to date", "group": "Periods", "kind": "month_to_date"},
+  {"id": "last-month", "label": "Last month", "group": "Periods", "kind": "last_month"},
+  {"id": "quarter-to-date", "label": "Quarter to date", "group": "Periods", "kind": "quarter_to_date"},
+  {"id": "last-quarter", "label": "Last quarter", "group": "Periods", "kind": "last_quarter"},
+  {"id": "2022-02", "label": "February 2022", "group": "Fixed", "kind": "fixed", "from": "2022-02-01", "to": "2022-02-28"},
+  {"id": "2022-03", "label": "March 2022", "group": "Fixed", "kind": "fixed", "from": "2022-03-01", "to": "2022-03-31"},
+  {"id": "2022-04", "label": "April 2022", "group": "Fixed", "kind": "fixed", "from": "2022-04-01", "to": "2022-04-30"},
+  {"id": "2022-05", "label": "May 2022", "group": "Fixed", "kind": "fixed", "from": "2022-05-01", "to": "2022-05-31"},
+  {"id": "2022-06", "label": "June 2022", "group": "Fixed", "kind": "fixed", "from": "2022-06-01", "to": "2022-06-30"},
+  {"id": "2022-q1", "label": "Q1 2022", "group": "Fixed", "kind": "fixed", "from": "2022-01-01", "to": "2022-03-31"},
+  {"id": "2022-q2", "label": "Q2 2022", "group": "Fixed", "kind": "fixed", "from": "2022-04-01", "to": "2022-06-30"},
+  {"id": "all-data", "label": "All data", "group": "Fixed", "kind": "fixed", "from": "2022-01-23", "to": "2022-07-27"}
+]

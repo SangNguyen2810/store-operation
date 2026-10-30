@@ -1,49 +1,54 @@
-import type { Filters, Granularity, Store } from '../../api/types'
-import { DateField } from '../../components/DateField'
+import type { DateRange, Filters, Granularity, Store } from '../../api/types'
 import { FilterPanel } from '../../components/FilterPanel'
 import { SegmentedControl } from '../../components/SegmentedControl'
 import { SelectField } from '../../components/SelectField'
-import { daysInclusive, isIsoDate } from '../../lib/dates'
-import { GRANULARITIES, MAX_DAYS, PRESETS, activePanelFilters, defaultFilters, presetFilters } from '../../lib/filters'
+import { GRANULARITIES, QUICK_RANGES, activePanelFilters, defaultFilters, findRange, rangeFilters } from '../../lib/filters'
 
 interface Props {
   filters: Filters
-  asOf: string
+  /** The ranges the API offers; nothing else can be chosen. */
+  ranges: DateRange[]
   stores: Store[]
   onChange: (next: Filters) => void
 }
 
-const presetOptions = PRESETS.map((p) => ({ value: String(p.days), label: `${p.days}d`, ariaLabel: p.label }))
 const groupOptions = GRANULARITIES.map((g) => ({ value: g, label: g[0].toUpperCase() + g.slice(1) }))
 
-/** Knows what the overview filters mean (presets, ranges, limits) and hands plain props to the UI components. */
-export function OverviewFilters({ filters, asOf, stores, onChange }: Props) {
-  const activeDays = filters.to === asOf ? daysInclusive(filters.from, filters.to) : null
-
-  function setDate(field: 'from' | 'to', value: string) {
-    if (!isIsoDate(value)) return // a half-typed date; wait for a complete one
-    const next = { ...filters, [field]: value }
-    const span = daysInclusive(next.from, next.to)
-    if (span < 1 || span > MAX_DAYS) return
-    onChange(next)
+/** Knows what the overview filters mean (ranges, stores, grouping) and hands plain props to the UI components. */
+export function OverviewFilters({ filters, ranges, stores, onChange }: Props) {
+  const current = findRange(ranges, filters.from, filters.to)
+  const choose = (id: string) => {
+    const range = ranges.find((r) => r.id === id)
+    if (range) onChange(rangeFilters(filters, range))
   }
+
+  // A button only for a quick range the API actually offers.
+  const quick = QUICK_RANGES.flatMap((q) => {
+    const range = ranges.find((r) => r.id === q.id)
+    return range ? [{ value: range.id, label: q.label, ariaLabel: range.label }] : []
+  })
 
   return (
     <FilterPanel
       label="Filters"
-      activeCount={activePanelFilters(filters, asOf)}
-      onReset={() => onChange(defaultFilters(asOf))}
+      activeCount={activePanelFilters(filters, ranges)}
+      onReset={() => onChange(defaultFilters(ranges))}
       primary={
         <SegmentedControl
           label="Range"
-          options={presetOptions}
-          value={PRESETS.some((p) => p.days === activeDays) ? String(activeDays) : null}
-          onChange={(days) => onChange(presetFilters(filters, asOf, Number(days)))}
+          options={quick}
+          value={quick.some((q) => q.value === current?.id) ? (current?.id ?? null) : null}
+          onChange={choose}
         />
       }
     >
-      <DateField label="From" value={filters.from} max={filters.to} onChange={(v) => setDate('from', v)} />
-      <DateField label="To" value={filters.to} min={filters.from} onChange={(v) => setDate('to', v)} />
+      <SelectField
+        label="More ranges"
+        wide
+        value={current?.id ?? ''}
+        options={ranges.map((r) => ({ value: r.id, label: r.label, group: r.group }))}
+        onChange={choose}
+      />
       <SelectField
         label="Store"
         wide

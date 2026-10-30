@@ -7,7 +7,7 @@ import (
 
 func clearEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"ADDR", "DATABASE_URL", "REDIS_URL", "CACHE_TTL", "ASOF_DATE"} {
+	for _, k := range []string{"ADDR", "DATABASE_URL", "CACHE_URL", "CACHE_TTL", "ASOF_DATE"} {
 		t.Setenv(k, "")
 	}
 }
@@ -18,7 +18,7 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Addr != ":8081" || cfg.RedisURL != "" || cfg.CacheTTL != 10*time.Minute {
+	if cfg.Addr != ":8081" || cfg.CacheURL != "" || cfg.CacheTTL != 10*time.Minute {
 		t.Errorf("defaults = %+v", cfg)
 	}
 	if got := cfg.AsOf.Format(dateLayout); got != "2022-07-27" {
@@ -33,14 +33,14 @@ func TestLoadFromEnv(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("ADDR", ":9000")
 	t.Setenv("DATABASE_URL", "postgres://x")
-	t.Setenv("REDIS_URL", "redis://localhost:6380/0")
+	t.Setenv("CACHE_URL", "http://localhost:8082")
 	t.Setenv("CACHE_TTL", "90s")
 	t.Setenv("ASOF_DATE", "2022-01-02")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Addr != ":9000" || cfg.DatabaseURL != "postgres://x" || cfg.RedisURL != "redis://localhost:6380/0" || cfg.CacheTTL != 90*time.Second {
+	if cfg.Addr != ":9000" || cfg.DatabaseURL != "postgres://x" || cfg.CacheURL != "http://localhost:8082" || cfg.CacheTTL != 90*time.Second {
 		t.Errorf("cfg = %+v", cfg)
 	}
 	if got := cfg.AsOf.Format(dateLayout); got != "2022-01-02" {

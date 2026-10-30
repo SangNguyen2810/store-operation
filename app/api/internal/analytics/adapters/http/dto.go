@@ -8,6 +8,26 @@ import "github.com/SangNguyen2810/store-operation/app/api/internal/analytics/dom
 type storeDTO struct {
 	ID    int    `json:"id"`
 	Label string `json:"label"`
+
+	Manager    string `json:"manager"`
+	Phone      string `json:"phone"`
+	Address    string `json:"address"`
+	District   string `json:"district"`
+	PostalCode string `json:"postalCode"`
+	City       string `json:"city"`
+	Country    string `json:"country"`
+
+	InventoryItems  int `json:"inventoryItems"`
+	ActiveCustomers int `json:"activeCustomers"`
+}
+
+type rangeDTO struct {
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Group   string `json:"group"`
+	From    string `json:"from"` // YYYY-MM-DD
+	To      string `json:"to"`   // YYYY-MM-DD
+	Default bool   `json:"default"`
 }
 
 type metricDTO struct {
@@ -39,7 +59,23 @@ type filmDTO struct {
 func toStores(in []domain.Store) []storeDTO {
 	out := make([]storeDTO, 0, len(in))
 	for _, s := range in {
-		out = append(out, storeDTO{ID: s.ID, Label: s.Label})
+		out = append(out, storeDTO{
+			ID: s.ID, Label: s.Label,
+			Manager: s.Manager, Phone: s.Phone, Address: s.Address, District: s.District,
+			PostalCode: s.PostalCode, City: s.City, Country: s.Country,
+			InventoryItems: s.InventoryItems, ActiveCustomers: s.ActiveCustomers,
+		})
+	}
+	return out
+}
+
+func toRanges(in []domain.Range) []rangeDTO {
+	out := make([]rangeDTO, 0, len(in))
+	for _, r := range in {
+		out = append(out, rangeDTO{
+			ID: r.ID, Label: r.Label, Group: r.Group,
+			From: r.From.Format(dateLayout), To: r.To.Format(dateLayout), Default: r.Default,
+		})
 	}
 	return out
 }

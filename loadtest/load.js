@@ -21,14 +21,15 @@ export const options = {
   },
 }
 
-// A small, fixed set of choices, as a real dashboard has (presets, two stores, three groupings),
-// so repeated requests exist and a cache has something to hit.
+// A small, fixed set of choices, as a real dashboard has (offered ranges, two stores, three groupings),
+// so repeated requests exist and a cache has something to hit. Only ranges from /api/presets are accepted.
+// They are the built-in list; a different list stored in Redis (`make seed-presets`) may refuse some of them.
 const WINDOWS = [
   `from=2022-07-21&to=${AS_OF}`, // last 7 days
   `from=2022-06-28&to=${AS_OF}`, // last 30 days
   `from=2022-04-29&to=${AS_OF}`, // last 90 days
-  'from=2022-03-01&to=2022-03-31',
-  'from=2022-01-01&to=2022-06-30',
+  'from=2022-03-01&to=2022-03-31', // March 2022
+  'from=2022-01-01&to=2022-03-31', // Q1 2022
 ]
 const STORES = ['', '', '&store=1', '&store=2'] // "all stores" is the most common
 const GRANULARITIES = ['day', 'week', 'month']
@@ -46,6 +47,7 @@ export default function () {
   // Opening the dashboard.
   expectOk.meta(get('/api/meta'))
   expectOk.stores(get('/api/stores'))
+  expectOk.presets(get('/api/presets'))
   view()
   // Then a few filter changes, with a think time between them.
   for (let i = 0; i < 3; i++) {

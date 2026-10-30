@@ -2,7 +2,7 @@
 
 A portfolio project for a Principal Frontend Engineer interview (React/Vue role), built on the Pagila DVD-rental database. It is meant to be walked through on screen as a code sample, so the plan favours clear structure and explainable trade-offs over feature count.
 
-**Status:** Phase 1 is built, verified, and published to GitHub with a CI workflow. A testing push came before the gateway (section 11) and is complete: Go unit tests (the backend integration tests were later removed), web unit and integration tests with a coverage gate, Playwright end-to-end tests, and k6. Phase 2, an API gateway plus a Redis cache (section 10), is done: the cache is in the API and the gateway is its own service in `gateway/`, with Docker images and a compose stack for the whole system. The repository was then restructured into a monorepo (section 13): `app/` for the services, `shared/` for the Go library they use, `infra/` for Docker, and one CI workflow per piece. The full microservices split (one binary per context, separate databases) is not started.
+**Status:** Phase 1 is built, verified, and published to GitHub with a CI workflow. A testing push came before the gateway (section 11) and is complete: Go unit tests (the backend integration tests were later removed), web unit and integration tests with a coverage gate, Playwright end-to-end tests, and k6. Phase 2, an API gateway plus a Redis cache (section 10), is done: the cache is in the API and the gateway is its own service in `gateway/`, with Docker images and a compose stack for the whole system. The repository was then restructured into a monorepo (section 13): `app/` for the services, `infra/` for Docker, and one CI workflow per piece. Redis then became a service of its own, the cache went over HTTP with an in-memory fallback, and the date ranges and store details became server-driven (section 14, all five phases done). The full microservices split (one binary per context, separate databases) is not started.
 
 ---
 
@@ -410,7 +410,7 @@ Each phase ships and is verified on its own; stop for a go-ahead after each.
 
 ## 12. Next steps, in order
 
-1. Push and check the first CI run on GitHub (five workflows: api, gateway, shared, web, stack, with e2e, k6 and docker jobs in stack) and fix what fails.
+1. Push and check the first CI run on GitHub (five workflows: api, gateway, redis, web, stack, with e2e, k6 and docker jobs in stack) and fix what fails.
 2. (done) The testing work in section 11.
 3. (done) Phase 2: gateway and Redis cache (section 10).
 4. Later: splitting the packages into binaries and databases.
@@ -418,6 +418,8 @@ Each phase ships and is verified on its own; stop for a go-ahead after each.
 ---
 
 ## 13. Done: restructure into a monorepo
+
+*This section records the restructure as it was done. `shared/` described below was removed in section 14, when Redis became a service and the cache client moved into the API.*
 
 **Request.** Put `api`, `gateway` and `web` in an `app` folder, take the Redis code out of the API into a shared folder, and shape the repo like a big-tech microservice monorepo.
 
@@ -448,3 +450,55 @@ loadtest/  docs/  Makefile  .env.example  .github/
 - Verified: `make check` (lint, typecheck, all tests, build); coverage gates for api (6 packages), gateway (2), shared (2) and web (98.96% statements, 100% branches); e2e 11/11; the Docker stack built from `infra/` with all four containers healthy; 16 cold and warm responses byte-identical to the standalone API; `make k6-compare` (cache with gateway 2.2 ms average against 1.9 ms direct).
 - Architecture tests: the API's no longer list `platform/cache` and `platform/rdb`; the cache adapter may import `shared/cache`; `shared` has a test that fails if it imports a service; the gateway's test rejects both the API and `shared`.
 - Not done: the five new workflows have not run on GitHub, so the path filters and the `shared` replace directive in CI are untested there. Files under `docs/` other than this section still use the old paths.
+
+---
+
+## 14. Done: the redis service and data-driven ranges
+
+**Request.** Make Redis its own service (`app/redis`, HTTP between it and the API), keep the in-memory fallback when it fails, store the date ranges the UI offers in Redis (served by an API, validated on every request, with a built-in list when Redis is down), and add store metadata. README updated in every phase.
+
+**Decisions**
+
+| Area | Decision | Why |
+|---|---|---|
+| Redis service API | HTTP: `GET` and `PUT /v1/cache/{key}?ttl=`, `GET /v1/stats`, `GET /healthz`. Keys `[A-Za-z0-9:._-]{1,200}`, values up to 1 MiB, ttl up to 24 h and required except for keys starting `config:` | Plain HTTP like the rest of the system; `config:` keys carry settings that must not expire |
+| gRPC | Not used. gateway to API and API to redis service stay HTTP | The gateway forwards requests without knowing the API; gRPC would make it translate every endpoint. Nothing else calls between services |
+| API failure flow | Redis service answers: use it. It fails: use the API's in-memory copy if still alive (500 entries, expiry from `X-Cache-Ttl`). Otherwise Postgres | Fail open, and survive a short outage without hitting the database |
+| Date ranges | Served by `GET /api/presets` (read-only for now), from Redis when it has a list, else a list built into the API. The API keeps a copy for 60 s. Requests whose `from` and `to` are not a listed range get `400`; no dates means the default range | Option A: custom dates are no longer accepted, so the set of windows is small and every one can be cached |
+| Range list | Recent (last 7, 14, 30 default, 60, 90, 180 days), Periods (month to date, last month, quarter to date, last quarter), Fixed (Feb to Jun 2022, Q1, Q2, all data) | Data spans 2022-01-23 to 2022-07-27 |
+| Store metadata | Manager, phone, address, district, postal code, city, country (Pagila); inventory items and active customers (computed). No email, no invented fields. Cached in Redis for 1 h | Real data only; email is personal data |
+| UI | Quick buttons for 7, 30 and 90 days, a grouped "More ranges" dropdown, and a store detail line under the filters | Small, visible change |
+
+**Phases (stop after each; README, docs and `.env.example` updated in each)**
+1. `app/redis` service. **Done.**
+2. API cache client over HTTP, shared lookups, in-memory fallback; remove `shared/`. **Done.**
+3. Ranges list, validation, `GET /api/presets`, store metadata. **Done.**
+4. Web app: ranges from the API, "More ranges", store detail line, tests. **Done.**
+5. Wiring: compose, Makefile, CI, k6 comparison with hit ratios, final docs. **Done.**
+
+**Phase 1 result**
+- Built: `app/redis` (module of its own, standard library plus go-redis), with `server`, `store` and `config` packages, a Dockerfile (22 MB image), a CI workflow `redis.yml`, `make dev-redis`, `make test-redis` and `make cover-redis`, and a `redis-service` entry in `infra/docker-compose.yml` with no published port. Nothing calls it yet; the API still uses `shared/` directly.
+- Verified: gofmt, vet and race tests pass three times in a row; coverage 100% config, 95.9% server, 94.3% store (floor 80%); eight deliberate breakages of the limits, header, leak protection, retries and expiry handling were each caught (two survivors at first, a testable `remaining` function and a retry assertion fixed them). Against a real Redis container with `curl`: put, get with `X-Cache-Ttl: 600`, miss, limits, `config:` key stored with no expiry, stats; with Redis stopped, `503` and a failing `/healthz`, and a clean recovery with the stored value intact. In Docker the service is healthy and unreachable from the host.
+- Note: go-redis turns `MaxRetries: -1` into 0 inside the client, so the test asserts 0.
+- Not done: the new CI workflow has not run on GitHub.
+
+**Phase 2 result**
+- Built: `app/api/internal/platform/cache` replaces `shared/` (deleted, with its workflow and Makefile targets). It has an HTTP client for the redis service, the read-through `Fetch` with shared lookups, and the in-memory copy (500 entries; the entry closest to expiry goes first; expiry from `X-Cache-Ttl`, 10 min when the key has none). `Get` reports `Hit`, `Miss`, `Fallback` or `Unavailable`. The API's `REDIS_URL` became `CACHE_URL`, and its Docker build context is now `app/api` alone.
+- Decision added: after a failure the service is not called again for 5 s. Without that, every request during an outage would wait for the 500 ms client timeout. A key the healthy service reports missing is dropped from the memory copy, so the copy never outlives the service's answer.
+- Verified: race tests; coverage 95.2% for the cache package; the old behaviours (shared lookups, error not cached, caller hanging up, unreadable entry) were ported as tests and new ones cover outages, recovery, the retry delay, bad `X-Cache-Ttl` values and the memory limit.
+
+**Phase 3 result**
+- Built: `domain/ranges.go` (definitions, validation, resolution against the as-of date, `FindRange`), the `RangeSource` port, `adapters/ranges` (reads `config:presets:v1`, keeps a copy, refreshes every 60 s, built-in list on a miss or an unusable list, keeps the list in use when the service is unavailable), `GET /api/presets`, strict validation in the HTTP adapter (both dates or neither, and the pair must be an offered range), and store details in `Stores` (manager, phone, address, district, postal code, city, country, inventory items, active customers), cached for 1 h. `make seed-presets` and `infra/presets.json` put a list in Redis.
+- Decisions added: the stored list is JSON with a `kind` (`days`, `month_to_date`, `last_month`, `quarter_to_date`, `last_quarter`, `fixed`) rather than finished dates, so relative ranges keep moving with the as-of date. When two entries have the same dates the first wins in the UI.
+- Verified: domain 100%, ranges adapter 100%; against Pagila, a real Redis and the redis service: 18 ranges served, store details match the database, unlisted and half windows get `400`, a custom list seeded in Redis took effect within the minute (and the old default was then refused), an outage was answered from memory with the new window still working from Postgres, and the service returned by itself.
+
+**Phase 4 result**
+- Built: `useRanges`, `fetchRanges`, filters keyed on the API's list (default from the list, URL carries the dates, a link to a range that left the list shows the default), 7d, 30d and 90d buttons from the list, a grouped "More ranges" menu (`SelectField` now supports groups), a store line under the filters (a summary of all stores, or the selected store's details), and a page-level error with Retry when the list cannot be loaded. `DateField` and `lib/dates` were removed.
+- Verified: 255 web unit and integration tests, coverage 98.8% lines; 14 end-to-end tests in a real browser against the real API (three new ones for the menu, refusal of an unlisted window, and the store line).
+
+**Phase 5 result**
+- Built: compose with the API on `CACHE_URL=http://redis-service:8082`, the CI path filters without `shared/`, k6 scripts that use only offered ranges and check `/api/presets`, store details and the refusals, and a four-column `make k6-compare` (no cache, cache, cache plus gateway, redis service down) that reports how many lookups the cache served.
+- Measured (one laptop, 20 users, 45 s each): no cache 6.3 ms average and 15.6 ms p95; with the cache 2.3 and 5.9 with 97.6% of lookups served from it; through the gateway 2.4 and 6.0 with 99.7%; redis service down 0.9 and 1.4, served from the in-memory copy. The HTTP hop to the redis service costs about 0.4 ms against the previous direct Redis call, and the memory copy is faster than any network hop. Zero failed requests in all four.
+- Verified in Docker: the whole stack up and healthy, `/api/presets` through the web container, the cache filling Redis, the redis service stopped and the API still answering (from memory, and from Postgres for a new window), then started again; the k6 smoke test passed through the gateway (37 of 37 checks).
+- Mutation check on the new Go code: 21 deliberate breakages (cache fallback, retry delay, memory limit, header parsing, quarter and month maths, validation, list handling); three survived at first and each exposed a missing assertion (a miss dropping the memory copy, the reason for half a window, the cache copy used at refresh), which were added; all 21 are now caught.
+- Not done: no workflow, including the new ones, has run on GitHub; the nginx container is only checked by hand; in the Docker stack all browsers share one rate-limit bucket (the web container's address).

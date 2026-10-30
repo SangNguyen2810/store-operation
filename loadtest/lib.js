@@ -45,6 +45,19 @@ export const expectOk = {
     check(r, {
       'stores: 200 json': (r) => r.status === 200 && isJson(r),
       'stores: id and label': (r) => Array.isArray(body(r)) && body(r).length > 0 && body(r).every((s) => Number.isInteger(s.id) && s.label),
+      'stores: details': (r) =>
+        Array.isArray(body(r)) &&
+        body(r).every((s) => s.manager && s.address && s.city && s.country && Number.isInteger(s.inventoryItems) && Number.isInteger(s.activeCustomers)),
+    }),
+  // The offered date ranges: every window the analytics endpoints will accept, with exactly one default.
+  presets: (r) =>
+    check(r, {
+      'presets: 200 json': (r) => r.status === 200 && isJson(r),
+      'presets: id, label, group and a window': (r) =>
+        Array.isArray(body(r)) &&
+        body(r).length > 0 &&
+        body(r).every((p) => p.id && p.label && p.group && /^\d{4}-\d{2}-\d{2}$/.test(p.from) && /^\d{4}-\d{2}-\d{2}$/.test(p.to) && p.from <= p.to),
+      'presets: exactly one default': (r) => Array.isArray(body(r)) && body(r).filter((p) => p.default).length === 1,
     }),
   kpis: (r) =>
     check(r, {

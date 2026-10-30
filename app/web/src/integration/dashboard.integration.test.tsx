@@ -1,8 +1,9 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { delay, http, HttpResponse, kpisFor, problem } from '../test/msw/handlers'
 import { requestsTo, server, setupFakeApi } from '../test/msw/server'
+import { RANGES } from '../test/fixtures'
 import { renderApp } from '../test/renderApp'
 
 // The real pages, hooks, router and fetch layer, against a fake of the Go API at the network level.
@@ -90,19 +91,20 @@ describe('changing a filter', () => {
     expect(requestsTo('/api/top/films')).toHaveLength(filmCalls)
   })
 
-  it('a custom From date is written to the URL together with the To date', async () => {
+  it('more ranges: choosing one writes both dates to the URL and requests exactly that window', async () => {
     await loaded()
-    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2022-07-01' } })
-    await waitFor(() => expect(url()).toBe('/?from=2022-07-01&to=2022-07-27'))
-    await waitFor(() => expect(requestsTo('/api/kpis').at(-1)).toBe('/api/kpis?from=2022-07-01&to=2022-07-27'))
+    await userEvent.selectOptions(screen.getByLabelText('More ranges'), 'Q1 2022')
+    expect(url()).toBe('/?from=2022-01-01&to=2022-03-31')
+    await waitFor(() => expect(requestsTo('/api/kpis').at(-1)).toBe('/api/kpis?from=2022-01-01&to=2022-03-31'))
+    expect(screen.getByLabelText('More ranges')).toHaveValue('2022-q1')
+    expect(screen.getByRole('button', { name: 'Last 30 days' })).toHaveAttribute('aria-pressed', 'false')
   })
 
-  it('a reversed range is ignored and nothing is requested for it', async () => {
+  it('there is no way to type a date', async () => {
     await loaded()
-    const before = requestsTo('/api/kpis').length
-    fireEvent.change(screen.getByLabelText('To'), { target: { value: '2022-06-01' } }) // earlier than From (2022-06-28)
-    expect(url()).toBe('/')
-    expect(requestsTo('/api/kpis')).toHaveLength(before)
+    expect(screen.queryByLabelText('From')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('To')).not.toBeInTheDocument()
+    expect(document.querySelector('input[type="date"]')).toBeNull()
   })
 })
 
@@ -111,8 +113,7 @@ describe('the URL is the state', () => {
     renderApp('/?from=2022-03-01&to=2022-03-31&store=1&granularity=week')
     await keyFigures()
     await waitFor(() => expect(screen.getByLabelText('Store')).toHaveValue('1'))
-    expect(screen.getByLabelText('From')).toHaveValue('2022-03-01')
-    expect(screen.getByLabelText('To')).toHaveValue('2022-03-31')
+    expect(screen.getByLabelText('More ranges')).toHaveValue('2022-03')
     expect(screen.getByLabelText('Group by')).toHaveValue('week')
     expect(await within(await keyFigures()).findByText('$200.00')).toBeInTheDocument()
     expect(requestsTo('/api/revenue')).toEqual(['/api/revenue?from=2022-03-01&to=2022-03-31&store=1&granularity=week'])
@@ -120,8 +121,8 @@ describe('the URL is the state', () => {
 
   it.each([
     ['garbage dates', '/?from=nope&to=2022-13-45'],
-    ['a reversed range', '/?from=2022-07-10&to=2022-07-01'],
-    ['a range over a year', '/?from=2020-01-01&to=2022-07-27'],
+    ['a range that is not offered', '/?from=2022-03-05&to=2022-03-20'],
+    ['only one date', '/?from=2022-03-01'],
     ['a bad granularity', '/?granularity=year'],
     ['a non-numeric store', '/?store=abc'],
   ])('falls back to the defaults for %s', async (_name, link) => {
@@ -166,7 +167,7 @@ describe('reset', () => {
 
     expect(url()).toBe('/')
     expect(screen.getByLabelText('Store')).toHaveValue('')
-    expect(screen.getByLabelText('From')).toHaveValue('2022-06-28')
+    expect(screen.getByLabelText('More ranges')).toHaveValue('last-30')
     expect(screen.getByLabelText('Group by')).toHaveValue('day')
     expect(await within(await keyFigures()).findByText('$300.00')).toBeInTheDocument()
     expect(requestsTo('/api/kpis').at(-1)).toBe('/api/kpis?from=2022-06-28&to=2022-07-27')
@@ -283,5 +284,75 @@ describe('routing', () => {
     expect(url()).toBe('/')
     expect(await within(await keyFigures()).findByText('$300.00')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Page not found' })).not.toBeInTheDocument()
+  })
+})
+
+describe('date ranges come from the API', () => {
+  it('requests the list once and offers exactly what it returns', async () => {
+    await loaded()
+    expect(requestsTo('/api/presets')).toEqual(['/api/presets'])
+    expect(screen.getByLabelText('More ranges').querySelectorAll('option')).toHaveLength(RANGES.length)
+  })
+
+  it('follows a different list: its default, its menu, and only the buttons it still has', async () => {
+    const custom = [
+      { id: 'last-7', label: 'This week', group: 'Mine', from: '2022-07-21', to: '2022-07-27', default: true },
+      { id: 'h1', label: 'First half', group: 'Mine', from: '2022-01-01', to: '2022-06-30', default: false },
+    ]
+    server.use(http.get('*/api/presets', () => HttpResponse.json(custom)))
+    renderApp()
+    await keyFigures()
+
+    expect(requestsTo('/api/kpis')).toEqual(['/api/kpis?from=2022-07-21&to=2022-07-27'])
+    expect(screen.getByRole('button', { name: 'This week' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByRole('button', { name: 'Last 30 days' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('More ranges').querySelectorAll('option')).toHaveLength(2)
+  })
+
+  it('a shared link to a range that is no longer offered shows the default instead', async () => {
+    server.use(http.get('*/api/presets', () => HttpResponse.json(RANGES.filter((r) => r.id !== '2022-03'))))
+    renderApp('/?from=2022-03-01&to=2022-03-31')
+    await keyFigures()
+    expect(requestsTo('/api/kpis')).toEqual(['/api/kpis?from=2022-06-28&to=2022-07-27'])
+  })
+
+  it('a failing list shows a page-level error, and Retry brings the dashboard up', async () => {
+    server.use(http.get('*/api/presets', () => problem(503, 'redis down'), { once: true }))
+    renderApp()
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/couldn't load the date ranges: redis down/i)
+
+    await userEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
+    expect(await within(await keyFigures()).findByText('$300.00')).toBeInTheDocument()
+  })
+
+  it('an empty list is reported instead of drawing a dashboard with no range', async () => {
+    server.use(http.get('*/api/presets', () => HttpResponse.json([])))
+    renderApp()
+    expect(await screen.findByRole('alert')).toHaveTextContent(/offered no date ranges/i)
+    expect(requestsTo('/api/kpis')).toHaveLength(0)
+  })
+})
+
+describe('the store line under the filters', () => {
+  it('summarises all stores, then describes the selected one, then goes back', async () => {
+    await loaded()
+    const line = () => screen.getByTestId('store-details')
+    expect(line()).toHaveTextContent('2 stores · 2,003 inventory items · 203 active customers')
+
+    await userEvent.selectOptions(screen.getByLabelText('Store'), 'Hamilton, New Zealand')
+    expect(line()).toHaveTextContent(
+      'Hamilton, New Zealand · Manager Pat Manager · 1 Main Street, Central 12345 · Phone 5550100 · 1,002 inventory items · 102 active customers',
+    )
+
+    await userEvent.selectOptions(screen.getByLabelText('Store'), 'All stores')
+    expect(line()).toHaveTextContent('2 stores')
+  })
+
+  it('is left out when the store list cannot be loaded', async () => {
+    server.use(http.get('*/api/stores', () => problem(500, 'internal error')))
+    renderApp()
+    await keyFigures()
+    expect(screen.queryByTestId('store-details')).not.toBeInTheDocument()
   })
 })

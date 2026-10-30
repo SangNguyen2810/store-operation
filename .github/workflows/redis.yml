@@ -1,34 +1,35 @@
-name: Shared
+name: Redis service
 
 on:
   push:
     branches: [main]
-    paths: ['shared/**', '.github/workflows/shared.yml']
+    paths: ['app/redis/**', '.github/workflows/redis.yml']
   pull_request:
-    paths: ['shared/**', '.github/workflows/shared.yml']
+    paths: ['app/redis/**', '.github/workflows/redis.yml']
 
 concurrency:
-  group: shared-${{ github.ref }}
+  group: redis-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  shared:
+  redis:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: shared
+        working-directory: app/redis
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: shared/go.mod
-          cache-dependency-path: shared/go.sum
+          go-version-file: app/redis/go.mod
+          cache-dependency-path: app/redis/go.sum
       - name: gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: go vet ./...
       - name: Tests and coverage gate
         run: ./scripts/covergate.sh
       - run: go test ./... -race -count=1
+      - run: go build -o bin/redis-service ./cmd/redis

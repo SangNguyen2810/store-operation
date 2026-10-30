@@ -21,6 +21,12 @@ type fakeSvc struct {
 	err    error
 }
 
+func (f *fakeSvc) Ranges(context.Context) ([]domain.Range, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return domain.ResolveRanges(domain.DefaultRangeDefs(), asOf)
+}
 func (f *fakeSvc) Stores(context.Context) ([]domain.Store, error) {
 	return []domain.Store{{ID: 1, Label: "A"}}, f.err
 }
@@ -39,7 +45,7 @@ func (f *fakeSvc) TopFilms(_ context.Context, fl domain.Filter, n int) ([]domain
 
 func handler(svc Analytics) http.Handler {
 	mux := http.NewServeMux()
-	Register(mux, svc, asOf)
+	Register(mux, svc)
 	return mux
 }
 
@@ -81,20 +87,72 @@ func TestParamsPassedThrough(t *testing.T) {
 	}
 }
 
-func TestOnlyToGivenDefaultsFrom(t *testing.T) {
-	svc := &fakeSvc{}
-	do(t, svc, "/api/kpis?to=2022-03-31")
-	if got := svc.filter.From.Format("2006-01-02"); got != "2022-03-02" {
-		t.Errorf("from = %s, want 2022-03-02", got)
+func TestEveryOfferedRangeIsAccepted(t *testing.T) {
+	ranges, err := domain.ResolveRanges(domain.DefaultRangeDefs(), asOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range ranges {
+		t.Run(r.ID, func(t *testing.T) {
+			svc := &fakeSvc{}
+			rec := do(t, svc, "/api/kpis?from="+r.From.Format("2006-01-02")+"&to="+r.To.Format("2006-01-02"))
+			if rec.Code != http.StatusOK || !svc.filter.From.Equal(r.From) || !svc.filter.To.Equal(r.To) {
+				t.Errorf("status %d filter %+v", rec.Code, svc.filter)
+			}
+		})
+	}
+}
+
+func TestHalfAWindowIsRefusedWithAClearReason(t *testing.T) {
+	for _, target := range []string{"/api/kpis?from=2022-06-28", "/api/kpis?to=2022-07-27"} {
+		rec := do(t, &fakeSvc{}, target)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "sent together") {
+			t.Errorf("%s: status %d body %s", target, rec.Code, rec.Body)
+		}
+	}
+}
+
+func TestPresetsResponse(t *testing.T) {
+	rec := do(t, &fakeSvc{}, "/api/presets")
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("status %d type %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	var got []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 18 {
+		t.Fatalf("%d ranges, want 18", len(got))
+	}
+	third := strings.TrimSpace(`{"default":true,"from":"2022-06-28","group":"Recent","id":"last-30","label":"Last 30 days","to":"2022-07-27"}`)
+	b, _ := json.Marshal(got[2])
+	if string(b) != third {
+		t.Errorf("third range\n got %s\nwant %s", b, third)
+	}
+	defaults := 0
+	for _, r := range got {
+		if r["default"] == true {
+			defaults++
+		}
+	}
+	if defaults != 1 {
+		t.Errorf("%d defaults, want 1", defaults)
+	}
+	if rec := do(t, &fakeSvc{err: errors.New("secret")}, "/api/presets"); rec.Code != 500 || strings.Contains(rec.Body.String(), "secret") {
+		t.Errorf("failure: status %d body %s", rec.Code, rec.Body)
 	}
 }
 
 func TestBadRequests(t *testing.T) {
 	cases := map[string]string{
-		"bad from":          "/api/kpis?from=nope",
-		"bad to":            "/api/kpis?to=2022-13-01",
+		"bad from":          "/api/kpis?from=nope&to=2022-07-27",
+		"bad to":            "/api/kpis?from=2022-06-28&to=2022-13-01",
+		"only from":         "/api/kpis?from=2022-06-28",
+		"only to":           "/api/kpis?to=2022-07-27",
+		"unlisted range":    "/api/kpis?from=2022-03-05&to=2022-03-20",
 		"from after to":     "/api/kpis?from=2022-07-01&to=2022-06-01",
 		"range too long":    "/api/kpis?from=2020-01-01&to=2022-01-01",
+		"off by one day":    "/api/kpis?from=2022-06-29&to=2022-07-27",
 		"bad store":         "/api/kpis?store=abc",
 		"negative store":    "/api/kpis?store=-1",
 		"bad granularity":   "/api/revenue?granularity=year",
@@ -142,13 +200,14 @@ func TestStoresResponse(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d", rec.Code)
 	}
-	if got := strings.TrimSpace(rec.Body.String()); got != `[{"id":1,"label":"A"}]` {
+	want := `[{"id":1,"label":"A","manager":"","phone":"","address":"","district":"","postalCode":"","city":"","country":"","inventoryItems":0,"activeCustomers":0}]`
+	if got := strings.TrimSpace(rec.Body.String()); got != want {
 		t.Errorf("body = %s", got)
 	}
 }
 
 func TestEveryEndpointHidesServiceErrors(t *testing.T) {
-	for _, target := range []string{"/api/stores", "/api/kpis", "/api/revenue", "/api/top/films"} {
+	for _, target := range []string{"/api/presets", "/api/stores", "/api/kpis", "/api/revenue", "/api/top/films"} {
 		t.Run(target, func(t *testing.T) {
 			rec := do(t, &fakeSvc{err: errors.New("secret")}, target)
 			if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "secret") {
@@ -195,5 +254,20 @@ func TestResponseShapes(t *testing.T) {
 				t.Errorf("body\n got %s\nwant %s", got, c.want)
 			}
 		})
+	}
+}
+
+// A list with no default cannot answer a request that names no dates.
+type noDefaultSvc struct{ fakeSvc }
+
+func (noDefaultSvc) Ranges(context.Context) ([]domain.Range, error) {
+	return []domain.Range{{ID: "x", From: asOf, To: asOf}}, nil
+}
+
+func TestNoDefaultRangeIsRejected(t *testing.T) {
+	rec := httptest.NewRecorder()
+	handler(&noDefaultSvc{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/kpis", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d", rec.Code)
 	}
 }

@@ -6,7 +6,6 @@ package httpadapter
 import (
 	"context"
 	"net/http"
-	"time"
 
 	"github.com/SangNguyen2810/store-operation/app/api/internal/analytics/domain"
 	"github.com/SangNguyen2810/store-operation/app/api/internal/platform/httpx"
@@ -14,24 +13,47 @@ import (
 
 // Analytics is what the handlers need; *app.Service satisfies it.
 type Analytics interface {
+	Ranges(ctx context.Context) ([]domain.Range, error)
 	Stores(ctx context.Context) ([]domain.Store, error)
 	KPIs(ctx context.Context, f domain.Filter) (domain.KPIs, error)
 	Revenue(ctx context.Context, f domain.Filter, g domain.Granularity) ([]domain.RevenuePoint, error)
 	TopFilms(ctx context.Context, f domain.Filter, limit int) ([]domain.FilmStat, error)
 }
 
-type handlers struct {
-	svc  Analytics
-	asOf time.Time
-}
+type handlers struct{ svc Analytics }
 
-// Register adds the analytics routes to mux. asOf anchors the default date range.
-func Register(mux *http.ServeMux, svc Analytics, asOf time.Time) {
-	h := &handlers{svc: svc, asOf: asOf}
+// Register adds the analytics routes to mux.
+func Register(mux *http.ServeMux, svc Analytics) {
+	h := &handlers{svc: svc}
+	mux.HandleFunc("GET /api/presets", h.presets)
 	mux.HandleFunc("GET /api/stores", h.stores)
 	mux.HandleFunc("GET /api/kpis", h.kpis)
 	mux.HandleFunc("GET /api/revenue", h.revenue)
 	mux.HandleFunc("GET /api/top/films", h.topFilms)
+}
+
+func (h *handlers) presets(w http.ResponseWriter, r *http.Request) {
+	ranges, err := h.svc.Ranges(r.Context())
+	if err != nil {
+		httpx.Fail(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, toRanges(ranges))
+}
+
+// filter parses the query against the offered ranges, answering 400 or 500 itself on failure.
+func (h *handlers) filter(w http.ResponseWriter, r *http.Request) (domain.Filter, bool) {
+	ranges, err := h.svc.Ranges(r.Context())
+	if err != nil {
+		httpx.Fail(w, r, err)
+		return domain.Filter{}, false
+	}
+	f, err := parseFilter(r, ranges)
+	if err != nil {
+		httpx.WriteProblem(w, http.StatusBadRequest, err.Error())
+		return domain.Filter{}, false
+	}
+	return f, true
 }
 
 func (h *handlers) stores(w http.ResponseWriter, r *http.Request) {
@@ -44,9 +66,8 @@ func (h *handlers) stores(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handlers) kpis(w http.ResponseWriter, r *http.Request) {
-	f, err := parseFilter(r, h.asOf)
-	if err != nil {
-		httpx.WriteProblem(w, http.StatusBadRequest, err.Error())
+	f, ok := h.filter(w, r)
+	if !ok {
 		return
 	}
 	k, err := h.svc.KPIs(r.Context(), f)
@@ -58,9 +79,8 @@ func (h *handlers) kpis(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handlers) revenue(w http.ResponseWriter, r *http.Request) {
-	f, err := parseFilter(r, h.asOf)
-	if err != nil {
-		httpx.WriteProblem(w, http.StatusBadRequest, err.Error())
+	f, ok := h.filter(w, r)
+	if !ok {
 		return
 	}
 	g, err := parseGranularity(r)
@@ -77,9 +97,8 @@ func (h *handlers) revenue(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handlers) topFilms(w http.ResponseWriter, r *http.Request) {
-	f, err := parseFilter(r, h.asOf)
-	if err != nil {
-		httpx.WriteProblem(w, http.StatusBadRequest, err.Error())
+	f, ok := h.filter(w, r)
+	if !ok {
 		return
 	}
 	limit, err := parseLimit(r)

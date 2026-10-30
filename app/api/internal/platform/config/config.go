@@ -15,8 +15,9 @@ type Config struct {
 	// AsOf is the dashboard's "today". Pagila's payments end on 2022-07-27,
 	// so "last 30 days" needs a fixed anchor to show anything.
 	AsOf time.Time
-	// RedisURL turns the cache on. Empty (the default) means no cache.
-	RedisURL string
+	// CacheURL is the redis service the cache talks to, such as http://localhost:8082.
+	// Empty (the default) means no cache.
+	CacheURL string
 	// CacheTTL is how long a cached query result stays valid.
 	CacheTTL time.Duration
 }
@@ -25,7 +26,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		Addr:        env("ADDR", ":8081"),
 		DatabaseURL: env("DATABASE_URL", "postgres://postgres:123456@localhost:5432/postgres"),
-		RedisURL:    env("REDIS_URL", ""),
+		CacheURL:    env("CACHE_URL", ""),
 	}
 	ttl, err := time.ParseDuration(env("CACHE_TTL", "10m"))
 	if err != nil || ttl <= 0 {

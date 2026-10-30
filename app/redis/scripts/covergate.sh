@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Runs the Go tests with coverage and fails when a package is below 80%.
+# Not gated: cmd/redis, the composition root.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -9,9 +10,10 @@ echo "$out" | grep -v 'no test files'
 echo "$out" | awk '
   /coverage: [0-9.]+%/ {
     pkg = ""
-    for (i = 1; i <= NF; i++) if ($i ~ /\/shared\//) pkg = $i
-    sub(/.*\/shared\//, "", pkg)
+    for (i = 1; i <= NF; i++) if ($i ~ /\/app\/redis\//) pkg = $i
+    sub(/.*\/app\/redis\//, "", pkg)
     pct = $0; sub(/.*coverage: /, "", pct); sub(/%.*/, "", pct)
+    if (pkg ~ /^cmd\//) next
     if (pct + 0 < 80) { printf "FAIL %s: %.1f%% < 80%%\n", pkg, pct; bad = 1 }
     checked++
   }

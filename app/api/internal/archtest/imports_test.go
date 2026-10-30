@@ -136,7 +136,7 @@ func TestViolationsAreDetected(t *testing.T) {
 		{"analytics/adapters/http", mod + "/internal/analytics/app"},
 		{"analytics/adapters/http", mod + "/internal/platform/httpx"},
 		{"analytics/adapters/cache", mod + "/internal/analytics/app"},
-		{"analytics/adapters/cache", "github.com/SangNguyen2810/store-operation/shared/cache"},
+		{"analytics/adapters/cache", mod + "/internal/platform/cache"},
 		{"platform/httpx", "net/http"},
 	}
 	for _, c := range ok {

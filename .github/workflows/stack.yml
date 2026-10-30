@@ -3,9 +3,9 @@ name: Stack
 on:
   push:
     branches: [main]
-    paths: ['app/**', 'shared/**', 'infra/**', 'loadtest/**', '.github/actions/**', '.github/workflows/stack.yml']
+    paths: ['app/**', 'infra/**', 'loadtest/**', '.github/actions/**', '.github/workflows/stack.yml']
   pull_request:
-    paths: ['app/**', 'shared/**', 'infra/**', 'loadtest/**', '.github/actions/**', '.github/workflows/stack.yml']
+    paths: ['app/**', 'infra/**', 'loadtest/**', '.github/actions/**', '.github/workflows/stack.yml']
 
 concurrency:
   group: stack-${{ github.ref }}
@@ -18,7 +18,7 @@ permissions:
 jobs:
   docker:
     runs-on: ubuntu-latest
-    # Builds the four-service stack, so a broken Dockerfile or compose file fails here.
+    # Builds every image in the stack, so a broken Dockerfile or compose file fails here.
     steps:
       - uses: actions/checkout@v4
       - run: docker compose -f infra/docker-compose.yml build

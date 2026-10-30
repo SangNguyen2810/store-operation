@@ -48,7 +48,7 @@ export function FilterPanel({ label, primary, children, activeCount, onReset }: 
       <div
         id={fieldsId}
         data-open={open}
-        className="hidden grid-cols-2 gap-3 data-[open=true]:grid sm:grid lg:grid-cols-[minmax(9.5rem,1fr)_minmax(9.5rem,1fr)_minmax(0,1.8fr)_minmax(7rem,1fr)_auto] lg:items-end"
+        className="hidden grid-cols-2 gap-3 data-[open=true]:grid sm:grid lg:grid-cols-[minmax(11rem,1fr)_minmax(0,1.6fr)_minmax(7rem,1fr)_auto] lg:items-end"
       >
         {children}
         {/* Always present so the layout never shifts; disabled when there is nothing to reset. */}

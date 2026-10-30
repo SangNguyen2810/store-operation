@@ -8,6 +8,7 @@
 <p align="center">
   <a href="https://github.com/SangNguyen2810/store-operation/actions/workflows/api.yml"><img alt="API" src="https://github.com/SangNguyen2810/store-operation/actions/workflows/api.yml/badge.svg"></a>
   <a href="https://github.com/SangNguyen2810/store-operation/actions/workflows/gateway.yml"><img alt="Gateway" src="https://github.com/SangNguyen2810/store-operation/actions/workflows/gateway.yml/badge.svg"></a>
+  <a href="https://github.com/SangNguyen2810/store-operation/actions/workflows/redis.yml"><img alt="Redis service" src="https://github.com/SangNguyen2810/store-operation/actions/workflows/redis.yml/badge.svg"></a>
   <a href="https://github.com/SangNguyen2810/store-operation/actions/workflows/web.yml"><img alt="Web" src="https://github.com/SangNguyen2810/store-operation/actions/workflows/web.yml/badge.svg"></a>
   <a href="https://github.com/SangNguyen2810/store-operation/actions/workflows/stack.yml"><img alt="Stack" src="https://github.com/SangNguyen2810/store-operation/actions/workflows/stack.yml/badge.svg"></a>
   <img alt="Go" src="https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white">
@@ -32,7 +33,8 @@ Store Operations Dashboard gives staff a single page to answer three questions: 
 - **Resilient by design.** Each section loads, empties and fails on its own, with retry. One failing query never takes down the page.
 - **Read-only.** The app adds no tables, views, indexes or migrations. Its database connections are opened with `default_transaction_read_only=on`.
 - **Gateway in front.** A separate service that routes requests, tags each with an id, logs them, rate-limits each client and times out slow upstreams.
-- **Optional Redis cache.** Set `REDIS_URL` and the heavy queries are served from Redis within a TTL, with identical responses. If Redis is down the API keeps working from Postgres.
+- **Date ranges and store details come from the server.** The UI offers the ranges `GET /api/presets` returns (7 to 180 days, month and quarter to date, last month and quarter, named 2022 months and quarters, all data), and the API refuses any window that is not one of them. A line under the filters shows the selected store's manager, address, phone, inventory and active customers.
+- **Optional cache service.** Set `CACHE_URL` and the heavy queries and store details are served from Redis, through a small Go service, within a TTL, with identical responses. If that service is down the API answers from a copy in its own memory while the entries last, and from Postgres after that.
 
 ## Quick start
 
@@ -45,7 +47,7 @@ make dev       # API on :8081, gateway on :8080, web on :5173
 
 Open <http://localhost:5173>. The browser talks to the gateway on `:8080`, which forwards to the API on `:8081`.
 
-**Or run everything in Docker** (Redis with the cache on, the API, the gateway and the web app), with Pagila still running on `localhost:5432`:
+**Or run everything in Docker** (Redis with the cache on, the redis service, the API, the gateway and the web app), with Pagila still running on `localhost:5432`:
 
 ```sh
 make up        # builds the images and starts the stack
@@ -57,7 +59,9 @@ Open <http://localhost:3000>. The API container reaches Pagila on the host; set 
 | Command | What it does |
 |---|---|
 | `make dev` | Runs the API, the gateway and the web dev server together |
-| `make up` / `make down` | Builds and starts, or stops, the whole stack in Docker (Redis, API, gateway, web) at <http://localhost:3000> |
+| `make dev-redis` | Runs the [redis service](#redis-service) on `:8082`, in front of a Redis from `make redis-up` |
+| `make seed-presets` | Stores [`infra/presets.json`](infra/presets.json) in Redis as the list of date ranges (see [Date ranges](#date-ranges)) |
+| `make up` / `make down` | Builds and starts, or stops, the whole stack in Docker (Redis, redis service, API, gateway, web) at <http://localhost:3000> |
 | `make test` | Runs the Go and web tests (see [Testing](#testing) for all kinds of tests) |
 | `make lint` | `gofmt`, `go vet`, and `oxlint` |
 | `make typecheck` | TypeScript project build check |
@@ -65,7 +69,7 @@ Open <http://localhost:3000>. The API container reaches Pagila on the host; set 
 | `make check` | Lint, typecheck, test and build |
 | `make redis-up` / `make redis-down` | Starts or stops just Redis in Docker (compose file: `infra/docker-compose.yml`) for the optional [query cache](#query-cache) |
 
-**Optional query cache.** Set `REDIS_URL` to serve the heavy queries from Redis; see [Query cache](#query-cache).
+**Optional query cache.** Set `CACHE_URL` to the redis service to serve the heavy queries from Redis; see [Query cache](#query-cache).
 
 ### Configuration
 
@@ -76,8 +80,8 @@ All settings are environment variables and all are optional. See [.env.example](
 | `ADDR` | `:8081` | API listen address (the gateway listens on `:8080`) |
 | `DATABASE_URL` | `postgres://postgres:123456@localhost:5432/postgres` | Pagila connection string |
 | `ASOF_DATE` | `2022-07-27` | The "today" for default date ranges |
-| `REDIS_URL` | *(unset)* | Turns the query cache on, for example `redis://localhost:6379`. Unset means no cache |
-| `CACHE_TTL` | `10m` | How long a cached query result stays valid |
+| `CACHE_URL` | *(unset)* | The [redis service](#redis-service) the cache talks to, for example `http://localhost:8082`. Setting it turns the cache on; unset means no cache |
+| `CACHE_TTL` | `10m` | How long a cached query result stays valid (store details stay for an hour) |
 
 The gateway has its own settings:
 
@@ -90,7 +94,14 @@ The gateway has its own settings:
 | `UPSTREAM_DIAL_TIMEOUT` | `2s` | How long to wait to connect to the API |
 | `UPSTREAM_HEADER_TIMEOUT` | `10s` | How long to wait for the API to start answering |
 
-Pagila's payments end on 2022-07-27, so "the last 30 days" needs a fixed anchor. The API exposes it at `GET /api/meta` and the UI reads it from there, so there is one source of truth.
+The redis service has two:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ADDR` | `:8082` | Redis service listen address |
+| `REDIS_URL` | `redis://localhost:6379` | The Redis server it stores into |
+
+Pagila's payments end on 2022-07-27, so "the last 30 days" needs a fixed anchor. The API exposes it at `GET /api/meta` and the UI shows it from there, so there is one source of truth. The date ranges the UI offers are measured from this date and come from `GET /api/presets`.
 
 ## API reference
 
@@ -100,25 +111,26 @@ A small read-only JSON API. Every endpoint is `GET`, needs no authentication, an
 |---|---|
 | [`GET /healthz`](#get-healthz) | Whether the API can reach the database |
 | [`GET /api/meta`](#get-apimeta) | The dashboard's "today" |
-| [`GET /api/stores`](#get-apistores) | The stores that hold inventory |
+| [`GET /api/presets`](#get-apipresets) | The date ranges the other endpoints accept |
+| [`GET /api/stores`](#get-apistores) | The stores that hold inventory, with their details |
 | [`GET /api/kpis`](#get-apikpis) | Four headline figures, each compared with the previous period |
 | [`GET /api/revenue`](#get-apirevenue) | Revenue over time, one point per bucket and store |
 | [`GET /api/top/films`](#get-apitopfilms) | The films that earned the most |
 
 ### Conventions
 
-**Date window.** `/api/kpis`, `/api/revenue` and `/api/top/films` all look at a window of whole days.
+**Date window.** `/api/kpis`, `/api/revenue` and `/api/top/films` all look at a window of whole days. The window must be one of the ranges [`GET /api/presets`](#get-apipresets) lists.
 
 | Parameter | Type | Default | Rules |
 |---|---|---|---|
-| `from` | date, `YYYY-MM-DD` | 29 days before `to` | First day of the window, inclusive |
-| `to` | date, `YYYY-MM-DD` | the as-of date (`ASOF_DATE`, 2022-07-27) | Last day of the window, inclusive |
+| `from` | date, `YYYY-MM-DD` | the default range's first day | First day of the window, inclusive. Send it together with `to` |
+| `to` | date, `YYYY-MM-DD` | the default range's last day | Last day of the window, inclusive. Send it together with `from` |
 | `store` | integer, 0 or more | all stores | Only count activity for this store |
 
 - Days are UTC and both ends are inclusive, so `from=2022-07-26&to=2022-07-27` is two days.
-- With no dates the window is the **30 days ending at the as-of date**. Give only `to` and the window is the 30 days ending there.
-- `from` must not be after `to`, and the window can be at most **366 days**.
-- The as-of date exists because Pagila's payments stop on 2022-07-27, so "the last 30 days" needs a fixed anchor. Read it from [`/api/meta`](#get-apimeta) instead of hard-coding it.
+- With no dates the window is the **default range**, "Last 30 days" unless the list says otherwise (`2022-06-28` to `2022-07-27`).
+- **Only listed ranges are accepted.** Send both dates exactly as `/api/presets` gives them. One date alone, a window that is not in the list (even one day off), or a malformed date is a `400`. There is no free date entry.
+- The as-of date exists because Pagila's payments stop on 2022-07-27, so "the last 30 days" needs a fixed anchor. It is in [`/api/meta`](#get-apimeta); the ranges are already measured from it.
 
 **Store attribution.** Money and rentals are attributed to a store through `payment → rental → inventory.store_id`, the same rule as Pagila's `sales_by_store` view. Only stores 1 and 2 hold inventory. An unknown store id is not an error: it simply matches nothing, so figures are 0 and lists are empty.
 
@@ -128,7 +140,7 @@ A small read-only JSON API. Every endpoint is `GET`, needs no authentication, an
 
 **Rate limit.** Each client address may make `RATE_LIMIT_RPS` requests per second (50 by default) with a burst of `RATE_LIMIT_BURST` (100). Beyond that the gateway answers `429` until a token is free; see [Errors](#errors).
 
-**Caching.** With `REDIS_URL` set, the figures behind `/api/kpis`, `/api/revenue` and `/api/top/films` can be up to `CACHE_TTL` (10 minutes by default) old. The responses are byte-identical to the uncached ones, and there is no cache header. `/api/stores`, `/api/meta` and `/healthz` are never cached. The data is static (as-of 2022), so staleness is not visible here; live data would need short TTLs or explicit invalidation.
+**Caching.** With `CACHE_URL` set, the figures behind `/api/kpis`, `/api/revenue` and `/api/top/films` can be up to `CACHE_TTL` (10 minutes by default) old, and `/api/stores` up to an hour. The responses are byte-identical to the uncached ones, and there is no cache header. `/api/meta`, `/api/presets` and `/healthz` are not cached per request (the range list is kept in the API and refreshed every minute; see [Date ranges](#date-ranges)). The data is static (as-of 2022), so staleness is not visible here; live data would need short TTLs or explicit invalidation.
 
 **Content types.** Successful responses are `application/json`. Errors from the API are `application/problem+json` (see [Errors](#errors)).
 
@@ -158,9 +170,37 @@ curl http://localhost:8080/api/meta
 { "asOf": "2022-07-27" }
 ```
 
+### `GET /api/presets`
+
+Lists the date ranges the dashboard offers, in the order to show them. These are the only windows the analytics endpoints accept, and the web app builds its range buttons and menu from this list. Takes no parameters.
+
+```sh
+curl http://localhost:8080/api/presets
+```
+
+```json
+[
+  { "id": "last-7",  "label": "Last 7 days",  "group": "Recent", "from": "2022-07-21", "to": "2022-07-27", "default": false },
+  { "id": "last-30", "label": "Last 30 days", "group": "Recent", "from": "2022-06-28", "to": "2022-07-27", "default": true },
+  { "id": "2022-q1", "label": "Q1 2022",      "group": "Fixed",  "from": "2022-01-01", "to": "2022-03-31", "default": false }
+]
+```
+
+(18 entries by default; three are shown.)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | Stable name of the range |
+| `label` | string | Text to show |
+| `group` | string | The menu heading it is listed under |
+| `from`, `to` | date, `YYYY-MM-DD` | The window, both ends inclusive, to pass as `from` and `to` |
+| `default` | boolean | Exactly one entry is the default, used when no dates are sent |
+
+The built-in list is **Recent** (last 7, 14, 30, 60, 90 and 180 days), **Periods** (month to date, last month, quarter to date, last quarter) and **Fixed** (February to June 2022, Q1 2022, Q2 2022, and "All data", 2022-01-23 to 2022-07-27). The relative ones move with the as-of date. See [Date ranges](#date-ranges) for where the list comes from.
+
 ### `GET /api/stores`
 
-Lists the stores that hold inventory, in id order. A store with no inventory (Pagila has 500 stores, only 2 stocked) is left out, because it would never have sales. Takes no parameters.
+Lists the stores that hold inventory, in id order, with their details. A store with no inventory (Pagila has 500 stores, only 2 stocked) is left out, because it would never have sales. Takes no parameters.
 
 ```sh
 curl http://localhost:8080/api/stores
@@ -168,8 +208,20 @@ curl http://localhost:8080/api/stores
 
 ```json
 [
-  { "id": 1, "label": "Boksburg, South Africa" },
-  { "id": 2, "label": "Hamilton, New Zealand" }
+  {
+    "id": 1, "label": "Boksburg, South Africa",
+    "manager": "Warner Hudson", "phone": "490211944645",
+    "address": "569 Baicheng Lane", "district": "Gauteng", "postalCode": "60304",
+    "city": "Boksburg", "country": "South Africa",
+    "inventoryItems": 2270, "activeCustomers": 326
+  },
+  {
+    "id": 2, "label": "Hamilton, New Zealand",
+    "manager": "Lavone O'Reilly", "phone": "657282285970",
+    "address": "478 Joliet Way", "district": "Hamilton", "postalCode": "77948",
+    "city": "Hamilton", "country": "New Zealand",
+    "inventoryItems": 2311, "activeCustomers": 273
+  }
 ]
 ```
 
@@ -177,6 +229,11 @@ curl http://localhost:8080/api/stores
 |---|---|---|
 | `id` | integer | Store id, the value to pass as `store` elsewhere |
 | `label` | string | `City, Country`, ready to show |
+| `manager` | string | The manager's first and last name |
+| `phone`, `address`, `district`, `postalCode` | string | As stored in Pagila's `address` table (empty when Pagila has none) |
+| `city`, `country` | string | The parts of `label` |
+| `inventoryItems` | integer | Items in the store's inventory (computed) |
+| `activeCustomers` | integer | Customers of the store whose account is active (computed) |
 
 ### `GET /api/kpis`
 
@@ -309,8 +366,8 @@ Bad input and server failures return a body in the [RFC 7807](https://www.rfc-ed
 | Status | When | `detail` |
 |---|---|---|
 | `400` | A date is not `YYYY-MM-DD` | `from: want YYYY-MM-DD` or `to: want YYYY-MM-DD` |
-| `400` | `from` is after `to` | `from must not be after to` |
-| `400` | The window is longer than 366 days | `range must not exceed 366 days` |
+| `400` | Only one of `from` and `to` is sent | `from and to must be sent together` |
+| `400` | The window is not one of the offered ranges | `from and to: not one of the offered ranges (see GET /api/presets)` |
 | `400` | `store` is not a non-negative integer | `store: want a non-negative integer` |
 | `400` | `granularity` is not `day`, `week` or `month` | `granularity: want day, week or month` |
 | `400` | `limit` is outside 1 to 50 | `limit: want 1..50` |
@@ -478,7 +535,7 @@ erDiagram
 
 ### What the app reads
 
-The API uses six tables. Everything else in Pagila is untouched.
+The API uses eight tables. Everything else in Pagila is untouched.
 
 | Table | Rows | Used for |
 |---|---|---|
@@ -487,9 +544,11 @@ The API uses six tables. Everything else in Pagila is untouched.
 | `inventory` | 4,581 | The link from a rental to a **store** and a **film**. This is how money is attributed to a store. |
 | `film` | 1,000 | Film titles for top films. |
 | `store` | 500 (only 2 stocked) | The store list. |
-| `address`, `city`, `country` | 603, 600, 109 | The `City, Country` label of a store. |
+| `address`, `city`, `country` | 603, 600, 109 | A store's `City, Country` label, address, district, postal code and phone. |
+| `staff` | 2 | A store's manager (`store.manager_staff_id`). |
+| `customer` | 599 | The count of a store's active customers (`activebool`). |
 
-The remaining tables (`customer`, `staff`, `actor`, `category`, `language`, `film_actor`, `film_category`) are not queried. They are shown above so the diagram is complete.
+The remaining tables (`actor`, `category`, `language`, `film_actor`, `film_category`) are not queried. They are shown above so the diagram is complete.
 
 ### How the queries join
 
@@ -502,7 +561,7 @@ payment ──rental_id──▶ rental ──inventory_id──▶ inventory �
 
 | Endpoint | Repo method | Tables read | Date column |
 |---|---|---|---|
-| `/api/stores` | `Stores` | `store`, `address`, `city`, `country`, `inventory` | none |
+| `/api/stores` | `Stores` | `store`, `staff`, `address`, `city`, `country`, `inventory`, `customer` | none |
 | `/api/kpis` | `Totals` | `payment`, `rental`, `inventory` | `payment_date` for revenue, `rental_date` for rentals and customers |
 | `/api/revenue` | `Revenue` | `payment`, `rental`, `inventory` | `payment_date` |
 | `/api/top/films` | `TopFilms` | `payment`, `rental`, `inventory`, `film` | `payment_date` |
@@ -520,7 +579,7 @@ payment ──rental_id──▶ rental ──inventory_id──▶ inventory �
 - **`payment` has no foreign keys** to `rental`, `customer` or `staff`, on the parent table or any partition. The relationship is by convention only, which is why the diagram draws it dotted.
 - **`store.manager_staff_id` has no foreign key**, because `staff.store_id` points back at `store` and the two would be circular.
 - **A rental can have more than one payment** (16,049 payments for 16,044 rentals). Top films therefore counts `DISTINCT rental_id` for its rentals figure.
-- **Only stores 1 and 2 hold inventory.** The other 498 stores can never have sales, so `/api/stores` leaves them out.
+- **Only stores 1 and 2 hold inventory.** The other 498 stores can never have sales, so `/api/stores` leaves them out. The store details have no email, because Pagila's `store` table has none.
 - **Not part of the model:** the views (`sales_by_store`, `sales_by_film_category`, `film_list`, `customer_list`, `staff_list`, `actor_info`, `nicer_but_slower_film_list`), the materialised view `rental_by_category`, and two unrelated tables loaded alongside Pagila (`packages_apt_postgresql_org`, `packages_yum_postgresql_org`).
 
 ## Architecture
@@ -545,14 +604,14 @@ flowchart LR
         api --> platform
         analytics --> platform
     end
-    subgraph lib [shared Go module]
-        shared["shared<br/>cache · rdb"]
+    subgraph kv [Go redis service · separate service]
+        redissvc["cmd/redis<br/>HTTP key-value API"]
     end
     web -- "JSON over /api/*" --> gateway
     gateway -- "reverse proxy" --> api
     analytics -- "pgx · read-only pool" --> pg[("Pagila<br/>PostgreSQL 17")]
-    analytics -. "uses" .-> shared
-    shared -. "optional cache · REDIS_URL" .-> redis[("Redis")]
+    analytics -. "optional cache · CACHE_URL<br/>HTTP, in-memory fallback" .-> redissvc
+    redissvc -- "RESP" --> redis[("Redis")]
 ```
 
 **Six ideas hold the design together:**
@@ -562,7 +621,7 @@ flowchart LR
 3. **The database is only ever read.** No tables, views, indexes or migrations are added, and the pool refuses writes.
 4. **Every screen section stands alone.** Loading, empty and error are handled per section, and filters live in the URL, so any view can be shared.
 5. **The gateway is its own service.** It is a separate Go module that knows nothing about analytics and imports only the standard library (a test enforces it), so it can be run, scaled and replaced on its own.
-6. **Shared code is a library, not a service.** `shared/` holds the generic Redis client and read-through cache, in a Go module of its own. A service imports it; it never imports a service (a test enforces it). What to cache stays in the API, because that is a business decision.
+6. **Redis is behind a service, not in a library.** `app/redis` owns the connection and speaks HTTP; the API calls it like any other service and keeps working, from a small copy in its own memory and then from Postgres, when it is down. Services share no Go code: each module imports only its own packages and third parties (a test in each enforces it). What to cache stays in the API, because that is a business decision.
 
 ### Backend: hexagonal contexts
 
@@ -582,26 +641,29 @@ flowchart LR
     end
 
     subgraph driven ["Driven side: gets called"]
-        cache["adapters/cache<br/>optional · implements Repo<br/>checks Redis first"]
+        cache["adapters/cache<br/>optional · implements Repo<br/>asks the cache first"]
+        ranges["adapters/ranges<br/>implements RangeSource<br/>keeps a refreshed copy"]
         pg["adapters/postgres<br/>implements Repo<br/>owns all SQL"]
     end
 
-    redis[("Redis")]
+    redis[("redis service<br/>+ Redis")]
     db[("Pagila<br/>PostgreSQL")]
 
     client -->|"HTTP request"| http
     http -->|"calls a use case"| app
     app -->|"asks for data"| port
     port -->|"implemented by"| pg
-    port -.->|"or by, when REDIS_URL is set"| cache
-    cache -->|"looks up"| redis
+    port -.->|"or by, when CACHE_URL is set"| cache
+    cache -->|"looks up over HTTP"| redis
+    ranges -->|"reads the range list"| redis
+    app -->|"asks which ranges exist"| ranges
     cache -->|"on a miss, asks the next Repo"| pg
     pg -->|"read-only SQL"| db
 ```
 
 - **Driving side:** something outside pushes work in. The HTTP adapter turns a request into a use-case call, and the app never knows HTTP exists.
 - **Core:** `app` holds the use cases and defines the `Repo` interface it needs. `domain` (the types and pure rules, standard library only) is used by every box here but sits outside this flow.
-- **Driven side:** the app reaches out for data through its own interface. The Postgres adapter implements it, so the app never knows about SQL. The optional cache adapter implements the same interface and wraps the Postgres one, so the app does not know a cache exists either. `cmd/api` decides at startup whether to wrap it.
+- **Driven side:** the app reaches out for data through its own interface. The Postgres adapter implements it, so the app never knows about SQL. The optional cache adapter implements the same interface and wraps the Postgres one, so the app does not know a cache exists either. `cmd/api` decides at startup whether to wrap it. A second port, `RangeSource`, supplies the list of date ranges; its adapter is described under [Date ranges](#date-ranges).
 
 The arrows show who **calls** whom, which is not who imports whom. `app` defines the `Repo` interface and calls it, but `app` never imports `adapters/postgres`. The adapter does not need `app` to work: Go interfaces are satisfied implicitly, so it only needs methods with matching signatures, written in `domain` types. It imports `app` for one line only, `var _ app.Repo = (*Repo)(nil)`, a compile-time check that a drifting signature fails in the adapter's own file instead of at the wiring. The dependency points inward, which is the allowed direction, and `app` knows nothing about SQL. That is what keeps SQL out of the core, and it is checked: the architecture test fails if `app` imports anything but `domain`. `cmd/api` is still the only file that wires both sides together. It builds the pieces once at startup and plugs them together, and it is not in the path of a request.
 
@@ -611,9 +673,9 @@ The repository is a monorepo of independent pieces. Each service has its own mod
 app/                             the deployable services
   api/                           analytics service (Go module)
   gateway/                       edge service (Go module, standard library only)
+  redis/                         key-value service in front of Redis (Go module)
   web/                           React app; its Dockerfile and nginx.conf serve it and proxy /api to the gateway
-shared/                          Go module used by services: the Redis client and read-through cache
-infra/                           docker-compose.yml: Redis, API, gateway and web
+infra/                           docker-compose.yml: Redis, redis service, API, gateway and web; presets.json, the date-range list for `make seed-presets`
 loadtest/                        k6 scripts and the cache and gateway comparison
 docs/  Makefile  .env.example    notes, commands and settings for the whole repo
 .github/                         one workflow per service, plus one for the cross-service jobs
@@ -629,6 +691,14 @@ app/gateway/
     config/                      environment settings
     archtest/                    fails if the gateway imports anything but the standard library
 
+app/redis/
+  cmd/redis/                     composition root: config, server, graceful shutdown
+  internal/
+    server/                      the HTTP API: routes, validation, problem responses, request log
+    store/                       the only code that talks to Redis: bytes in, bytes out, expiry, counters
+    config/                      environment settings
+    archtest/                    fails if the service imports another service
+
 app/api/
   cmd/api/                       composition root: builds the pool, wires contexts, serves HTTP
   internal/
@@ -638,16 +708,13 @@ app/api/
       adapters/
         postgres/                driven adapter: implements Repo, owns all SQL
         cache/                   driven adapter: implements Repo in front of another Repo; picks what to cache and the keys
+        ranges/                  driven adapter: implements RangeSource; reads the range list from the cache, keeps a copy, falls back to the built-in list
         http/                    driving adapter: routes, validation, response types
     platform/                    plumbing that knows no context
+      cache/                     client of the redis service: read-through Fetch, shared lookups, in-memory fallback
       db/                        read-only pool
       config/  httpx/            env config, JSON/problem/logging/health
     archtest/                    enforces the import rules below
-
-shared/
-  cache/                         read-through cache: Redis, TTL, shared lookups, failing open
-  rdb/                           Redis client with short timeouts and no retries
-  archtest/                      fails if shared code imports a service
 ```
 
 **Where does it go?**
@@ -658,7 +725,8 @@ shared/
 | What the system can do (a new question it can answer) | `app/` |
 | A query, or how Pagila tables are read | `adapters/postgres/` |
 | What is cached, or how a query's key is built | `adapters/cache/` |
-| How caching works (Redis, TTL, shared lookups, failing open) | `shared/cache/` |
+| How caching works (the redis service, TTL, shared lookups, the in-memory fallback) | `platform/cache/` |
+| Which date ranges exist, how they resolve, and how a window is validated | `domain/ranges.go` (rules), `adapters/ranges/` (where the list comes from) |
 | A route, a query parameter, or the JSON shape | `adapters/http/` |
 | Timeouts, logging, error format, the DB pool | `platform/` |
 | Routing, rate limit, request id or access log at the edge | `app/gateway/internal/gateway/` |
@@ -670,12 +738,12 @@ shared/
 |---|---|
 | `domain` | standard library |
 | `app` | standard library, its own `domain` |
-| `adapters/*` | its own `domain` and `app`, `platform`, third-party (including the `shared` module). Never another adapter |
+| `adapters/*` | its own `domain` and `app`, `platform`, third-party. Never another adapter |
 | `platform` | no context |
 | a context | itself and `platform`, never another context |
 | `cmd` | anything (composition root) |
 
-The gateway lives in its own module and cannot import the API's packages at all. Its own architecture test allows only the standard library and its own packages, and fails if the API or `shared` is mentioned. `shared` has no context rules, but its test fails if it imports any service.
+The gateway lives in its own module and cannot import the API's packages at all. Its own architecture test allows only the standard library and its own packages, and fails if the API is mentioned. The redis service's test fails if it imports another service.
 
 ### Request lifecycle
 
@@ -692,7 +760,9 @@ sequenceDiagram
     participant DB as Pagila
 
     W->>H: GET /api/kpis?from&to&store
-    H->>H: parse and validate (400 problem on bad input)
+    H->>A: Ranges(ctx)
+    A-->>H: the offered ranges, resolved against the as-of date
+    H->>H: parse and validate: both dates, and the window must be an offered range (400 problem otherwise)
     H->>A: KPIs(ctx, Filter)
     A->>P: Totals(current window)
     P->>DB: one query, read-only
@@ -707,36 +777,49 @@ sequenceDiagram
     H-->>W: 200 JSON
 ```
 
-**With the cache on** (`REDIS_URL` set), every `Totals`, `Revenue` and `TopFilms` call above goes through the cache adapter first. A KPI request makes two `Totals` calls, one per window, and each is cached on its own:
+**With the cache on** (`CACHE_URL` set), every `Stores`, `Totals`, `Revenue` and `TopFilms` call above goes through the cache adapter first. A KPI request makes two `Totals` calls, one per window, and each is cached on its own:
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant A as app.Service
     participant C as adapters/cache
-    participant R as Redis
+    participant S as redis service
+    participant M as in-memory copy
     participant P as adapters/postgres
     participant DB as Pagila
 
     A->>C: Totals(window)
-    C->>R: GET analytics:v1:totals:from:to:store
+    C->>S: GET /v1/cache/analytics:v1:totals:from:to:store
     alt hit, within the TTL
-        R-->>C: stored JSON
+        S-->>C: stored JSON + X-Cache-Ttl
+        C->>M: keep a copy until it expires
         C-->>A: Totals
-    else miss, or Redis unreachable
-        R-->>C: nothing
+    else miss
+        S-->>C: 404
         C->>P: Totals(window)
         P->>DB: one query, read-only
         DB-->>P: figures
         P-->>C: Totals
-        C->>R: SET with the TTL
+        C->>S: PUT with the TTL
         C-->>A: Totals
+    else the service is unavailable
+        S--xC: error or 503 (not asked again for 5 s)
+        alt the copy has not expired
+            C->>M: look up
+            M-->>C: stored JSON
+            C-->>A: Totals
+        else no copy
+            C->>P: Totals(window)
+            P-->>C: Totals
+            C-->>A: Totals
+        end
     end
 ```
 
 - Requests for the same key at the same moment share one lookup, so a cold key causes one query.
-- A Redis error is logged and treated as a miss, so the request is still answered from Postgres. Errors from Postgres are returned and never cached.
-- Each lookup logs one `cache` line with the outcome: `hit`, `miss` or `coalesced`.
+- A failed cache call is logged once and the request is still answered, from the in-memory copy or from Postgres. Errors from Postgres are returned and never cached.
+- Each lookup logs one `cache` line with the outcome: `hit`, `miss`, `coalesced` (joined a query already running) or `fallback` (served from the in-memory copy).
 
 Errors are handled once, at the edge: bad input becomes a `400` problem body with a reason, and anything else is logged server-side and returned as a generic `500`, so internals never reach the client.
 
@@ -750,7 +833,7 @@ flowchart LR
     features["features<br/>containers: call hooks, apply rules,<br/>map data to props"] --> components
     features --> hooks["hooks<br/>one react-query hook per file<br/>+ URL state"]
     hooks --> api["api<br/>typed client"]
-    features --> lib["lib<br/>formatting, filters, dates"]
+    features --> lib["lib<br/>formatting, filters"]
     hooks --> lib
     components["components<br/>pure UI: props in, JSX out"] --> lib
     components --> libs["components/libs/recharts<br/>the only door to the chart library"]
@@ -761,14 +844,14 @@ flowchart LR
 web/src/
   routes.tsx, App.tsx, main.tsx   composition: the route table ("/" dashboard, anything else 404) and providers
   pages/                          thin route-level screens (HomePage, NotFoundPage)
-  features/overview/              OverviewPage (the one container) + mapping helpers (kpis.ts, films.ts, OverviewFilters)
-  hooks/                          useMeta, useStores, useKpis, useRevenue, useTopFilms, useFilters, queryKeys
+  features/overview/              OverviewPage (the one container) + mapping helpers (kpis.ts, films.ts, storeDetails.ts, OverviewFilters)
+  hooks/                          useMeta, useRanges, useStores, useKpis, useRevenue, useTopFilms, useFilters, queryKeys
   components/                     one folder per component: Name.tsx + index.ts + Name.test.tsx
     AsyncSection  ErrorState  PageHeader  Skeleton  TimeSeriesChart
-    KpiCard  KpiGrid  RankedTable  Table  SegmentedControl  SelectField  DateField  Field  FilterPanel
+    KpiCard  KpiGrid  RankedTable  Table  SegmentedControl  SelectField  Field  FilterPanel
     libs/recharts/                wrappers for the 8 chart pieces we use, with our design defaults
   api/                            typed client, one function per endpoint
-  lib/                            dates, format, filters, useBreakpoint
+  lib/                            format, filters, useBreakpoint
   index.css                       Tailwind import, colour tokens (light and dark) and a small base layer
 ```
 
@@ -785,7 +868,7 @@ web/src/
 Rules, enforced by `src/archtest.test.ts` on every `npm test`:
 
 - **Pure UI.** A component takes plain props (strings, numbers, options, callbacks) and has no idea what a "film" or a "filter" is. `KpiGrid` renders cards; `features/overview/kpis.ts` decides what the cards say.
-- **Logic in features.** A feature calls the hooks, applies the rules (limits, presets, formatting) and maps domain data to props. `OverviewPage` is the only place that calls the query hooks.
+- **Logic in features.** A feature calls the hooks, applies the rules (which ranges get a button, formatting) and maps domain data to props. `OverviewPage` is the only place that calls the query hooks.
 - **One door to the chart library.** Everything charts need comes from `components/libs/recharts`. Each of the eight wrappers sets our theme defaults (grid and axis colours, tooltip style, 2 px lines with no dots and no animation) and lets the caller override any of them. Swapping the library is a one-folder change.
 - **One file per query.** Each react-query hook has its own file and test, and cache keys live in `queryKeys.ts`.
 
@@ -808,7 +891,7 @@ Mobile-first with two breakpoints, `sm` (640 px) and `lg` (1024 px). Anything CS
 | | Mobile (< 640 px) | Tablet (640 to 1023 px) | Desktop (1024 px and up) |
 |---|---|---|---|
 | **Page width** | Full width, 16 px gutters | Full width, 24 px gutters | Up to 1280 px |
-| **Filters** | Presets plus a **Filters** button (shows an active count); dates, store and grouping open in place, with **Reset filters** (always shown, disabled when nothing is active) | Presets, then fields two per row | One aligned row, every control the same height |
+| **Filters** | The 7d, 30d and 90d buttons plus a **Filters** button (shows an active count); the "More ranges" menu, store and grouping open in place, with **Reset filters** (always shown, disabled when nothing is active) | The buttons, then fields two per row | One aligned row, every control the same height |
 | **Key figures** | 2 × 2 | 4 across | 4 across |
 | **Revenue / Top films** | Stacked, 240 px chart | Stacked, 300 px chart | Side by side (3:2), 380 px chart |
 | **Top films** | Rentals under the title | Rentals column | Rentals column |
@@ -825,28 +908,64 @@ Mobile-first with two breakpoints, `sm` (640 px) and `lg` (1024 px). Anything CS
 |---|---|
 | **Read-only safety** | Pool opened with `default_transaction_read_only=on`, so Postgres itself rejects writes |
 | **Time zone** | Connections run in UTC, windows are inclusive whole days |
-| **Timeouts** | API: 10 s statement timeout, 5 s header read, 15 s response write, 10 s graceful shutdown; Redis dial, read and write 250 ms with no retries. Gateway: 2 s to connect to the API, 10 s for it to start answering, 20 s response write |
+| **Timeouts** | API: 10 s statement timeout, 5 s header read, 15 s response write, 10 s graceful shutdown; the redis service is asked for at most 500 ms and not again for 5 s after a failure; the redis service gives Redis 250 ms with no retries. Gateway: 2 s to connect to the API, 10 s for it to start answering, 20 s response write |
 | **Errors** | RFC 7807-style problem bodies; internals are logged, never returned |
-| **Observability** | Structured `slog` request logs with method, path, query and duration, and the gateway's `request_id` when there is one (the gateway also logs status and client IP); a `cache` log line per lookup (`hit`, `miss`, `coalesced`) when the cache is on; `/healthz` pings the database, not Redis |
-| **Caching** | Optional read-through Redis cache on `Totals`, `Revenue` and `TopFilms`; `CACHE_TTL` (10 min), no invalidation because the data is static; identical lookups share one query; fails open when Redis is down |
+| **Observability** | Structured `slog` request logs with method, path, query and duration, and the gateway's `request_id` when there is one (the gateway also logs status and client IP); a `cache` log line per lookup (`hit`, `miss`, `coalesced`, `fallback`) when the cache is on; `/healthz` pings the database, not Redis |
+| **Caching** | Optional read-through cache, through the redis service, on `Totals`, `Revenue`, `TopFilms` (`CACHE_TTL`, 10 min) and `Stores` (1 h); no invalidation because the data is static; identical lookups share one query; if the service is down, a 500-entry in-memory copy answers until each entry expires, then Postgres |
 | **Accessibility** | Keyboard-reachable controls, deltas shown by arrow and text (not colour alone), chart text alternative and table view |
 | **Performance** | Chart library lazy-loaded; first load is about 95 kB gzipped; previous data stays up while new filters load |
 
 ## Query cache
 
-The cache is optional and off by default. With it on, the three heaviest read queries (key figures, revenue and top films) are served from Redis for a while instead of being recomputed.
+The cache is optional and off by default. With it on, the heaviest read queries (key figures, revenue and top films) and the store details are served from Redis for a while instead of being recomputed. The API does not talk to Redis itself: it calls the [redis service](#redis-service) over HTTP.
 
 ```sh
 make redis-up                                     # or REDIS_PORT=6380 make redis-up if 6379 is taken
-REDIS_URL=redis://localhost:6379 make dev
+make dev-redis                                    # the redis service on :8082 (REDIS_URL=redis://localhost:6380 if you moved Redis)
+CACHE_URL=http://localhost:8082 make dev-api
 ```
 
-- **How it behaves.** A request first looks in Redis. Within the TTL (`CACHE_TTL`, default 10 minutes) it gets the stored answer; otherwise the API queries Postgres, stores the result and returns it. Responses are byte-for-byte the same with or without the cache.
+- **How it behaves.** A request first asks the redis service. Within the TTL (`CACHE_TTL`, default 10 minutes; store details 1 hour) it gets the stored answer; otherwise the API queries Postgres, stores the result and returns it. Responses are byte-for-byte the same with or without the cache.
 - **Many requests at once.** Identical requests that arrive together cause a single database query.
-- **If Redis is down** the API keeps working from Postgres. Redis calls time out after 250 ms and are not retried.
+- **If the redis service or Redis is down** the API keeps working. It keeps a copy (at most 500 entries) of what it recently read or stored, and while the service is unavailable it answers from that copy until each entry's own expiry; after that, or for something it never saw, it queries Postgres. It does not ask the service again for 5 seconds after a failure, so an outage costs requests nothing extra, and it returns to the service by itself. A key the healthy service says is gone is dropped from the copy, so the copy never outlives the service's own answer.
 - **No invalidation.** The data is static (as of 2022-07-27), so entries just expire. With live data you would want a short TTL.
-- **What to expect.** One heavy query takes about 20 ms on this dataset, so a single user will not notice. Under load it matters more: in a local run with 20 simulated users (`make k6-compare`), the average response time dropped from about 7.9 ms to 1.7 ms and the p95 from about 20 ms to 3.6 ms. That is an indication from one laptop, not a benchmark.
-- **Logs.** With the cache on, each lookup logs a `cache` line with the outcome `hit`, `miss` or `coalesced`.
+- **What to expect.** One heavy query takes about 20 ms on this dataset, so a single user will not notice. Under load it matters more: in a local run with 20 simulated users (`make k6-compare`), the average response time dropped from about 6.3 ms to 2.3 ms and the p95 from about 16 ms to 6 ms, with 97.6% of lookups served from the cache. The same run with the redis service down averaged 0.9 ms: the in-memory copy skips the network hop, which is also why a real deployment would often keep such a copy in front of a shared cache. That is an indication from one laptop, not a benchmark.
+- **Logs.** With the cache on, each lookup logs a `cache` line with the outcome `hit`, `miss`, `coalesced` or `fallback`, and the first failure of the service logs one warning.
+
+## Date ranges
+
+The ranges the UI offers are data, not code. The API turns a list of definitions into concrete windows measured from the as-of date, serves them at [`GET /api/presets`](#get-apipresets), and refuses any other window.
+
+- **Where the list lives.** In Redis, under the key `config:presets:v1`, as JSON, with no expiry. If Redis holds no list, or the stored one is unusable (bad JSON, no default, a duplicate id, a range over 366 days), the API uses the built-in list and logs why. Today the list is read-only for the app; put one there yourself:
+
+  ```sh
+  make seed-presets                                  # stores infra/presets.json, which is the built-in list; edit it first
+  docker compose -f infra/docker-compose.yml exec redis redis-cli del config:presets:v1   # back to the built-in list
+  ```
+
+- **How fresh.** The API reads the key at start and again every 60 seconds, and keeps the last good copy, so a request never waits on Redis. A change shows up within a minute. If the redis service is down at a refresh, the list in use stays as it is.
+- **Format.** An array of definitions:
+
+  ```json
+  [
+    { "id": "last-30", "label": "Last 30 days", "group": "Recent", "kind": "days", "days": 30, "default": true },
+    { "id": "month-to-date", "label": "Month to date", "group": "Periods", "kind": "month_to_date" },
+    { "id": "2022-q1", "label": "Q1 2022", "group": "Fixed", "kind": "fixed", "from": "2022-01-01", "to": "2022-03-31" }
+  ]
+  ```
+
+  | `kind` | Window |
+  |---|---|
+  | `days` | The `days` days ending at the as-of date (1 to 366) |
+  | `month_to_date` | The 1st of the as-of date's month up to the as-of date |
+  | `last_month` | The whole month before the as-of date's month |
+  | `quarter_to_date` | The 1st of the as-of date's quarter up to the as-of date |
+  | `last_quarter` | The whole quarter before the as-of date's quarter |
+  | `fixed` | `from` to `to`, both `YYYY-MM-DD`, at most 366 days |
+
+  A list has 1 to 50 entries, unique ids, a label and a group (up to 60 characters each) and exactly one `"default": true`.
+- **Validation.** `from` and `to` must both be sent, and the pair must equal an offered range exactly. Anything else is a `400` and the web app never sends it: it has no date entry, only the buttons and the "More ranges" menu. A shared link to a range that has since left the list shows the default range.
+- **Web.** The 7d, 30d and 90d buttons are the ranges with the ids `last-7`, `last-30` and `last-90`, if the list has them. Everything else is in the "More ranges" menu, under its group. The default is whichever range the list marks.
 
 ## Gateway
 
@@ -891,7 +1010,31 @@ What it does not do: authentication, load balancing (one API only), TLS, caching
 - The client IP is the address the connection came from. `X-Forwarded-For` is ignored, because nothing trusted sits in front of the gateway and the header would let a client choose its own bucket. In the Docker stack the web container is in front of the gateway, so all browsers there share one bucket of 50 requests per second.
 - A single page load makes about five requests, so normal use is far under the limit. A load test is not normal use: 20 simulated users from one machine go over it. Run the gateway with `RATE_LIMIT_RPS=0` for `make k6-load`.
 
-**What it costs.** In a local `make k6-compare` run with 20 simulated users, the cached API averaged 1.8 ms with a p95 of 3.6 ms when called directly, and 2.0 ms with a p95 of 4.0 ms through the gateway (rate limit off): about 0.2 ms more per request. One laptop, one run: an indication, not a benchmark.
+**What it costs.** In a local `make k6-compare` run with 20 simulated users, the cached API averaged 2.3 ms with a p95 of 5.9 ms when called directly, and 2.4 ms with a p95 of 6.0 ms through the gateway (rate limit off): about 0.1 ms more per request. One laptop, one run: an indication, not a benchmark.
+
+## Redis service
+
+`app/redis` is a small service that owns the connection to Redis and exposes it as an HTTP key-value API. It stores bytes and does not know what they mean. It is reachable only on the Docker network (port 8082 is not published). The API calls it when `CACHE_URL` is set (`http://redis-service:8082` in the Docker stack) for the [query cache](#query-cache) and the [date-range list](#date-ranges). Run it with `make dev-redis`, or with the rest of the stack through `make up`.
+
+| Request | Answer |
+|---|---|
+| `GET /v1/cache/{key}` | `200` with the stored bytes and `X-Cache-Ttl` (seconds left; absent for a key that never expires), or `404` |
+| `PUT /v1/cache/{key}?ttl=10m` | `204`. The body is the value |
+| `GET /v1/stats` | Counters since start: `{"hits":…,"misses":…,"sets":…,"errors":…}` |
+| `GET /healthz` | `200`, or `503` when Redis does not answer |
+
+Rules, all answered with a problem body like the other services' errors:
+
+- A **key** is 1 to 200 letters, digits or `: . _ -`, otherwise `400`.
+- A **value** is at most 1 MiB (`413` above that) and not empty (`400`).
+- **`ttl`** is a duration above 0 up to `24h`. It is required, except for keys that start with `config:`, which are settings and may be stored without an expiry. Anything else is `400`.
+- If Redis is down, `GET` and `PUT` return `503` (`cache backend unavailable`) and the real error is only logged; `/healthz` returns `503` too. The service keeps running and recovers by itself when Redis comes back.
+- Redis calls time out after 250 ms and are not retried.
+
+```sh
+curl -X PUT --data '{"revenue":12.5}' 'http://localhost:8082/v1/cache/analytics:v1:demo?ttl=10m'
+curl -i http://localhost:8082/v1/cache/analytics:v1:demo      # 200, X-Cache-Ttl: 600
+```
 
 ## Testing
 
@@ -899,12 +1042,12 @@ There are four kinds of tests. The Go and web tests need nothing but Go and Node
 
 | Kind | What it checks | Needs | Command |
 |---|---|---|---|
-| **Go** | API: business rules, use cases, request parsing, JSON field names, error bodies, the Redis cache (against an in-memory Redis), config, and the layering rules between packages. Gateway: routing, request ids, the access log, the rate limit, 502 and 504, and that it imports only the standard library. Shared: the Redis cache and client | nothing | `make test-api`, `make test-gateway`, `make test-shared` |
-| **Web** | Components, hooks, URL and filter handling, the API client, the layering rules between folders, and the whole app against a fake API: filters, URL, errors and Retry, Reset, browser Back, 404 | nothing | `make test-web` |
-| **End to end** | A real browser on the real stack: figures match the API, filters, Back, Reset, errors, the chart tooltip, and a phone-sized screen | Pagila, Chromium | `make e2e` |
-| **API load (k6)** | Every endpoint answers correctly and fast; response times under 20 users | Pagila, k6, a running API | `make k6-smoke`, `make k6-load` |
+| **Go** | API: business rules (including how each date range resolves and which windows are valid), use cases, request parsing, JSON field names, error bodies, the cache client (against a fake redis service, including outages and the in-memory copy), the range list adapter, config, and the layering rules between packages. Gateway: routing, request ids, the access log, the rate limit, 502 and 504, and that it imports only the standard library. Redis service: the key-value API, its limits, expiry, counters and Redis being down (against an in-memory Redis) | nothing | `make test-api`, `make test-gateway`, `make test-redis` |
+| **Web** | Components, hooks, URL and filter handling, the API client, the layering rules between folders, and the whole app against a fake API: ranges from the API, filters, URL, errors and Retry, Reset, browser Back, the store line, 404 | nothing | `make test-web` |
+| **End to end** | A real browser on the real stack: figures match the API, ranges, filters, Back, Reset, errors, the store line, the chart tooltip, and a phone-sized screen | Pagila, Chromium | `make e2e` |
+| **API load (k6)** | Every endpoint answers correctly and fast, bad windows are refused; response times under 20 users | Pagila, k6, a running API | `make k6-smoke`, `make k6-load` |
 
-`make test` runs the Go (both services and `shared`) and web tests together, and `make check` adds lint, typecheck and build. `make cover-api`, `make cover-gateway`, `make cover-shared` and `make cover-web` run the same tests and fail when coverage drops below the floors described below.
+`make test` runs the Go (the three services) and web tests together, and `make check` adds lint, typecheck and build. `make cover-api`, `make cover-gateway`, `make cover-redis` and `make cover-web` run the same tests and fail when coverage drops below the floors described below.
 
 ### Go tests
 
@@ -915,11 +1058,11 @@ cd app/api && go test -run TestKPIs ./...          # tests by name
 make cover-api                                 # tests plus the coverage floors
 make test-gateway                              # the gateway's tests
 make cover-gateway                             # the gateway with its coverage floor (80%)
-make test-shared                               # the shared module's tests
-make cover-shared                              # the shared module with its coverage floor (80%)
+make test-redis                                # the redis service's tests
+make cover-redis                               # the redis service with its coverage floor (80%)
 ```
 
-The coverage floors are 90% for the `domain` and `app` packages and 80% for every other package. The gateway's and `shared`'s floor is 80%. The `cmd/api` and `cmd/gateway` entry points and the two packages that only talk to Postgres (`adapters/postgres` and `platform/db`) are not counted.
+The coverage floors are 90% for the `domain` and `app` packages and 80% for every other package. The gateway's and the redis service's floor is 80%. The `cmd/api`, `cmd/gateway` and `cmd/redis` entry points and the two packages that only talk to Postgres (`adapters/postgres` and `platform/db`) are not counted.
 
 ### Web tests
 
@@ -959,22 +1102,22 @@ Install [k6](https://k6.io) once (`brew install k6`), and have the API and gatew
 make k6-smoke                                  # one user, every endpoint, answers checked (about a second)
 make k6-load                                   # ramps to 20 users for about 45 seconds
 BASE_URL=http://localhost:8081 make k6-load    # straight to the API, skipping the gateway
-make k6-compare                                # the same load without and with the Redis cache, and through the gateway
+make k6-compare                                # the same load without the cache, with it, through the gateway, and with the redis service down
 ```
 
 The tests go to the gateway on `:8080` by default. `make k6-load` sends more requests per second from one address than the gateway's default limit allows, so start the gateway with the limit off: `RATE_LIMIT_RPS=0 make dev-gateway`.
 
-`make k6-smoke` fails if any answer has the wrong status, content type or shape. `make k6-load` fails if the p95 response time is over 200 ms (250 ms for a single endpoint) or more than 1% of requests fail. `make k6-compare` starts its own APIs and a gateway, so it needs Redis running (`REDIS_PORT=6380 make redis-up`), and prints a table of response times without the cache, with it, and with it through the gateway. More detail is in [loadtest/README.md](loadtest/README.md).
+`make k6-smoke` fails if any answer has the wrong status, content type or shape, or if a window that is not an offered range is not refused. `make k6-load` fails if the p95 response time is over 200 ms (250 ms for a single endpoint) or more than 1% of requests fail; it uses the built-in ranges, so a different list in Redis may make it fail with `400`s. `make k6-compare` starts its own APIs, redis service and gateway, so it needs Redis running (`REDIS_PORT=6380 make redis-up`), and prints a table of response times without the cache, with it, with it through the gateway, and with the redis service down, plus how many lookups the cache served. More detail is in [loadtest/README.md](loadtest/README.md).
 
 ### Continuous integration
 
-Each piece has its own workflow in [.github/workflows](.github/workflows), triggered by a push to `main` or a pull request that touches that piece's folder, so a change to the web app does not rebuild the API. `api.yml` also runs when `shared/` changes, because the API depends on it. `stack.yml` runs whenever anything under `app/`, `shared/`, `infra/` or `loadtest/` changes, because its jobs need several services together. The end-to-end and k6 jobs use a real Postgres loaded with Pagila:
+Each piece has its own workflow in [.github/workflows](.github/workflows), triggered by a push to `main` or a pull request that touches that piece's folder, so a change to the web app does not rebuild the API. `stack.yml` runs whenever anything under `app/`, `infra/` or `loadtest/` changes, because its jobs need several services together. The end-to-end and k6 jobs use a real Postgres loaded with Pagila:
 
 | Workflow: job | Runs |
 |---|---|
 | `api.yml`: `api` | `gofmt`, `go vet`, the Go tests with the coverage floors, the Go tests again with the race detector, and a build |
 | `gateway.yml`: `gateway` | `gofmt`, `go vet`, the gateway tests with the coverage floor, the race detector, and a build |
-| `shared.yml`: `shared` | `gofmt`, `go vet`, the shared tests with the coverage floor, and the race detector |
+| `redis.yml`: `redis` | `gofmt`, `go vet`, the redis service tests with the coverage floor, the race detector, and a build |
 | `web.yml`: `web` | lint, typecheck, the web tests with the coverage floors, and a build |
 | `stack.yml`: `docker` | builds the images for the whole stack |
 | `stack.yml`: `e2e` | the Playwright suite; the report and traces are attached when it fails |

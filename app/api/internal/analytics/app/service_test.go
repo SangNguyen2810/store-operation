@@ -17,6 +17,18 @@ func day(s string) time.Time {
 	return t
 }
 
+var asOf = day("2022-07-27")
+
+// builtIn is a RangeSource that always offers the built-in list.
+type builtIn struct{}
+
+func (builtIn) RangeDefs(context.Context) []domain.RangeDef { return domain.DefaultRangeDefs() }
+
+// badSource offers a list that cannot be resolved.
+type badSource struct{}
+
+func (badSource) RangeDefs(context.Context) []domain.RangeDef { return nil }
+
 type fakeRepo struct {
 	Repo
 	byFrom map[time.Time]domain.Totals
@@ -35,7 +47,7 @@ func TestKPIsDeltas(t *testing.T) {
 		cur.From:  {Revenue: 150, Payments: 30, Rentals: 40, ActiveCustomers: 10},
 		prev.From: {Revenue: 100, Payments: 20, Rentals: 0, ActiveCustomers: 10},
 	}}
-	k, err := NewService(repo).KPIs(context.Background(), cur)
+	k, err := NewService(repo, builtIn{}, asOf).KPIs(context.Background(), cur)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +67,7 @@ func TestKPIsDeltas(t *testing.T) {
 
 func TestKPIsNoPayments(t *testing.T) {
 	cur := domain.Filter{From: day("2022-07-01"), To: day("2022-07-10")}
-	k, err := NewService(&fakeRepo{byFrom: map[time.Time]domain.Totals{}}).KPIs(context.Background(), cur)
+	k, err := NewService(&fakeRepo{byFrom: map[time.Time]domain.Totals{}}, builtIn{}, asOf).KPIs(context.Background(), cur)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +98,7 @@ func TestKPIsPropagatesErrors(t *testing.T) {
 	for name, ok := range map[string]int{"current window fails": 0, "previous window fails": 1} {
 		t.Run(name, func(t *testing.T) {
 			repo := &errRepo{okCalls: ok}
-			if _, err := NewService(repo).KPIs(context.Background(), f); !errors.Is(err, errBoom) {
+			if _, err := NewService(repo, builtIn{}, asOf).KPIs(context.Background(), f); !errors.Is(err, errBoom) {
 				t.Errorf("err = %v, want boom", err)
 			}
 		})
@@ -96,7 +108,7 @@ func TestKPIsPropagatesErrors(t *testing.T) {
 func TestKPIsAsksForPreviousWindow(t *testing.T) {
 	f := domain.Filter{From: day("2022-07-01"), To: day("2022-07-10")}
 	repo := &fakeRepo{byFrom: map[time.Time]domain.Totals{}}
-	if _, err := NewService(repo).KPIs(context.Background(), f); err != nil {
+	if _, err := NewService(repo, builtIn{}, asOf).KPIs(context.Background(), f); err != nil {
 		t.Fatal(err)
 	}
 	if len(repo.seen) != 2 || !repo.seen[0].From.Equal(f.From) || !repo.seen[1].From.Equal(f.PreviousWindow().From) {
@@ -128,7 +140,7 @@ func (p *passRepo) TopFilms(_ context.Context, f domain.Filter, n int) ([]domain
 func TestPassThroughs(t *testing.T) {
 	f := domain.Filter{From: day("2022-07-01"), To: day("2022-07-10")}
 	repo := &passRepo{}
-	svc := NewService(repo)
+	svc := NewService(repo, builtIn{}, asOf)
 	ctx := context.Background()
 
 	if s, err := svc.Stores(ctx); err != nil || len(s) != 1 || s[0].ID != 1 {
@@ -150,5 +162,27 @@ func TestPassThroughs(t *testing.T) {
 	}
 	if _, err := svc.TopFilms(ctx, f, 1); !errors.Is(err, errBoom) {
 		t.Errorf("films err = %v", err)
+	}
+}
+
+func TestRangesAreResolvedAgainstAsOf(t *testing.T) {
+	got, err := NewService(&fakeRepo{}, builtIn{}, asOf).Ranges(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	def, ok := domain.DefaultRange(got)
+	if !ok || !def.From.Equal(day("2022-06-28")) || !def.To.Equal(asOf) {
+		t.Errorf("default = %+v", def)
+	}
+	// Moving as-of moves the relative ranges.
+	later, _ := NewService(&fakeRepo{}, builtIn{}, day("2022-08-15")).Ranges(context.Background())
+	if d, _ := domain.DefaultRange(later); !d.To.Equal(day("2022-08-15")) {
+		t.Errorf("default for a later as-of = %+v", d)
+	}
+}
+
+func TestRangesRejectAnUnusableList(t *testing.T) {
+	if _, err := NewService(&fakeRepo{}, badSource{}, asOf).Ranges(context.Background()); err == nil {
+		t.Error("an empty list should be an error")
 	}
 }

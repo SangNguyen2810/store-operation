@@ -2,6 +2,7 @@ import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AppRoutes } from './routes'
+import { RANGES, makeStore } from './test/fixtures'
 import { renderWithProviders } from './test/utils'
 
 function mockApi() {
@@ -9,7 +10,8 @@ function mockApi() {
   const kpi = { value: 100, previous: 50, deltaPct: 100 }
   const routes: Record<string, unknown> = {
     '/api/meta': { asOf: '2022-07-27' },
-    '/api/stores': [{ id: 1, label: 'Boksburg, South Africa' }],
+    '/api/presets': RANGES,
+    '/api/stores': [makeStore(1, 'Boksburg, South Africa')],
     '/api/kpis': { revenue: kpi, rentals: kpi, activeCustomers: kpi, avgPayment: kpi },
     '/api/revenue': [{ bucket: '2022-07-27', storeId: 1, revenue: 100 }],
     '/api/top/films': [{ filmId: 1, title: 'ACADEMY DINOSAUR', rentals: 3, revenue: 12.5 }],

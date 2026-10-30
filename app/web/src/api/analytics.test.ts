@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fetchKpis, fetchMeta, fetchRevenue, fetchStores, fetchTopFilms } from './analytics'
+import { fetchKpis, fetchMeta, fetchRanges, fetchRevenue, fetchStores, fetchTopFilms } from './analytics'
 import type { Filters } from './types'
 
 const filters: Filters = { from: '2022-07-01', to: '2022-07-10', store: 2, granularity: 'week' }
@@ -14,11 +14,12 @@ afterEach(() => vi.unstubAllGlobals())
 
 // These URLs are the contract with the Go API.
 describe('analytics requests', () => {
-  it('meta and stores take no parameters', async () => {
+  it('meta, ranges and stores take no parameters', async () => {
     const urls = stub()
     await fetchMeta()
+    await fetchRanges()
     await fetchStores()
-    expect(urls()).toEqual(['/api/meta', '/api/stores'])
+    expect(urls()).toEqual(['/api/meta', '/api/presets', '/api/stores'])
   })
 
   it('kpis send the range and store but not the granularity', async () => {

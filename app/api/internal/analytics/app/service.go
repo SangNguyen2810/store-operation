@@ -4,13 +4,27 @@ package app
 
 import (
 	"context"
+	"time"
 
 	"github.com/SangNguyen2810/store-operation/app/api/internal/analytics/domain"
 )
 
-type Service struct{ repo Repo }
+type Service struct {
+	repo   Repo
+	ranges RangeSource
+	asOf   time.Time
+}
 
-func NewService(repo Repo) *Service { return &Service{repo: repo} }
+// NewService wires the use cases. asOf is the dashboard's "today", which the
+// relative date ranges are measured from.
+func NewService(repo Repo, ranges RangeSource, asOf time.Time) *Service {
+	return &Service{repo: repo, ranges: ranges, asOf: asOf}
+}
+
+// Ranges returns the date ranges the dashboard offers, resolved against as-of.
+func (s *Service) Ranges(ctx context.Context) ([]domain.Range, error) {
+	return domain.ResolveRanges(s.ranges.RangeDefs(ctx), s.asOf)
+}
 
 func (s *Service) Stores(ctx context.Context) ([]domain.Store, error) { return s.repo.Stores(ctx) }
 

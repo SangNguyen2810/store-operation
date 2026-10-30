@@ -31,7 +31,7 @@ describe('queryKeys', () => {
   })
 
   it('keeps each resource in its own namespace', () => {
-    const keys = [queryKeys.meta, queryKeys.stores, queryKeys.kpis(base), queryKeys.revenue(base), queryKeys.topFilms(base)]
+    const keys = [queryKeys.meta, queryKeys.ranges, queryKeys.stores, queryKeys.kpis(base), queryKeys.revenue(base), queryKeys.topFilms(base)]
     expect(new Set(keys.map((k) => k[0])).size).toBe(keys.length)
   })
 })

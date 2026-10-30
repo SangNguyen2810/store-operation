@@ -1,5 +1,6 @@
 import { http, HttpResponse, delay } from 'msw'
-import type { FilmStat, Kpis, Metric, RevenuePoint, Store } from '../../api/types'
+import type { FilmStat, Kpis, Metric, RevenuePoint } from '../../api/types'
+import { RANGES, STORES } from '../fixtures'
 
 /**
  * A small fake of the Go API that answers by the query string, like the real
@@ -8,10 +9,7 @@ import type { FilmStat, Kpis, Metric, RevenuePoint, Store } from '../../api/type
  * contract, so a client that drifts from them fails here.
  */
 
-export const STORES: Store[] = [
-  { id: 1, label: 'Boksburg, South Africa' },
-  { id: 2, label: 'Hamilton, New Zealand' },
-]
+export { STORES }
 
 const metric = (value: number, previous: number): Metric => ({
   value,
@@ -55,6 +53,7 @@ function series(params: URLSearchParams): RevenuePoint[] {
 
 export const handlers = [
   http.get('*/api/meta', () => HttpResponse.json({ asOf: '2022-07-27' })),
+  http.get('*/api/presets', () => HttpResponse.json(RANGES)),
   http.get('*/api/stores', () => HttpResponse.json(STORES)),
   http.get('*/api/kpis', ({ request }) => HttpResponse.json(kpisFor(new URL(request.url).searchParams.get('store')))),
   http.get('*/api/revenue', ({ request }) => HttpResponse.json(series(new URL(request.url).searchParams))),

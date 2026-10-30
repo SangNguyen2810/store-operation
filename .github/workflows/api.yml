@@ -3,9 +3,9 @@ name: API
 on:
   push:
     branches: [main]
-    paths: ['app/api/**', 'shared/**', '.github/workflows/api.yml']
+    paths: ['app/api/**', '.github/workflows/api.yml']
   pull_request:
-    paths: ['app/api/**', 'shared/**', '.github/workflows/api.yml']
+    paths: ['app/api/**', '.github/workflows/api.yml']
 
 concurrency:
   group: api-${{ github.ref }}

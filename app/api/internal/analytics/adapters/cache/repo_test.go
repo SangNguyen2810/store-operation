@@ -2,17 +2,19 @@ package cache
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
-
 	"github.com/SangNguyen2810/store-operation/app/api/internal/analytics/app"
 	"github.com/SangNguyen2810/store-operation/app/api/internal/analytics/domain"
-	sharedcache "github.com/SangNguyen2810/store-operation/shared/cache"
+	platformcache "github.com/SangNguyen2810/store-operation/app/api/internal/platform/cache"
 )
 
 const ttl = time.Minute
@@ -40,13 +42,64 @@ func (f *fakeInner) TopFilms(_ context.Context, _ domain.Filter, limit int) ([]d
 	return []domain.FilmStat{{FilmID: limit, Title: "T", Rentals: 1, Revenue: 9.99}}, nil
 }
 
-func setup(t *testing.T) (*Repo, *fakeInner, *miniredis.Miniredis) {
+// fakeService is the redis service's HTTP contract over a map.
+type fakeService struct {
+	mu sync.Mutex
+	m  map[string][]byte
+}
+
+func (f *fakeService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	key := strings.TrimPrefix(r.URL.EscapedPath(), "/v1/cache/")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch r.Method {
+	case http.MethodGet:
+		v, ok := f.m[key]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write(v)
+	case http.MethodPut:
+		f.m[key], _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func (f *fakeService) exists(key string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.m[key]
+	return ok
+}
+
+func (f *fakeService) keys() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for k := range f.m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func newService(t *testing.T) (*platformcache.Cache, *fakeService) {
 	t.Helper()
-	mr := miniredis.RunT(t)
-	rc := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1, DialTimeout: time.Second})
-	t.Cleanup(func() { rc.Close() })
+	fake := &fakeService{m: map[string][]byte{}}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	c, err := platformcache.New(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, fake
+}
+
+func setup(t *testing.T) (*Repo, *fakeInner, *fakeService) {
+	t.Helper()
+	c, fake := newService(t)
 	inner := &fakeInner{}
-	return New(sharedcache.New(rc, ttl), inner), inner, mr
+	return New(c, inner, ttl), inner, fake
 }
 
 func day(d int) time.Time { return time.Date(2022, 7, d, 0, 0, 0, 0, time.UTC) }
@@ -55,8 +108,8 @@ func window(from, to int) domain.Filter { return domain.Filter{From: day(from), 
 
 func ptr(i int) *int { return &i }
 
-func TestRepeatedQueriesAreServedFromRedis(t *testing.T) {
-	repo, inner, mr := setup(t)
+func TestRepeatedQueriesAreServedFromTheCache(t *testing.T) {
+	repo, inner, svc := setup(t)
 	ctx := context.Background()
 	f := window(1, 10)
 
@@ -71,14 +124,14 @@ func TestRepeatedQueriesAreServedFromRedis(t *testing.T) {
 	if n := inner.totals.Load(); n != 1 || first != second {
 		t.Fatalf("inner queried %d times, fresh %+v, cached %+v", n, first, second)
 	}
-	if !mr.Exists(key("totals", f)) {
-		t.Fatalf("expected key %q in Redis, have %v", key("totals", f), mr.Keys())
+	if !svc.exists(key("totals", f)) {
+		t.Fatalf("expected key %q in the redis service, have %v", key("totals", f), svc.keys())
 	}
 }
 
 func TestEachKPIWindowIsCachedOnItsOwn(t *testing.T) {
 	repo, inner, _ := setup(t)
-	svc := app.NewService(repo)
+	svc := app.NewService(repo, nil, day(1))
 	ctx := context.Background()
 	f := window(10, 19)
 
@@ -146,23 +199,52 @@ func TestDomainValuesSurviveTheRoundTrip(t *testing.T) {
 	}
 }
 
-func TestStoresPassThrough(t *testing.T) {
-	mr := miniredis.RunT(t)
-	rc := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { rc.Close() })
-	repo := New(sharedcache.New(rc, ttl), storesOnly{})
+func TestStoresAreCachedForAnHour(t *testing.T) {
+	c, svc := newService(t)
+	inner := &storesOnly{}
+	repo := New(c, inner, ttl)
 
-	got, err := repo.Stores(context.Background())
-	if err != nil || len(got) != 1 {
-		t.Fatalf("got %+v, %v", got, err)
+	first, err := repo.Stores(context.Background())
+	if err != nil || len(first) != 1 {
+		t.Fatalf("got %+v, %v", first, err)
 	}
-	if len(mr.Keys()) != 0 {
-		t.Fatalf("Stores wrote to Redis: %v", mr.Keys())
+	second, _ := repo.Stores(context.Background())
+	if inner.calls.Load() != 1 || !reflect.DeepEqual(first, second) {
+		t.Fatalf("queried %d times; fresh %+v, cached %+v", inner.calls.Load(), first, second)
+	}
+	if !svc.exists("analytics:v1:stores") {
+		t.Fatalf("expected the stores key, have %v", svc.keys())
+	}
+	if storesTTL != time.Hour {
+		t.Errorf("storesTTL = %v, want 1h", storesTTL)
 	}
 }
 
-type storesOnly struct{ app.Repo }
+func TestStoreDetailsSurviveTheRoundTrip(t *testing.T) {
+	c, _ := newService(t)
+	want := domain.Store{
+		ID: 2, Label: "Hamilton, New Zealand", Manager: "Lavone O'Reilly", Phone: "657282285970",
+		Address: "478 Joliet Way", District: "Hamilton", PostalCode: "77948", City: "Hamilton", Country: "New Zealand",
+		InventoryItems: 2311, ActiveCustomers: 273,
+	}
+	repo := New(c, &storesOnly{stores: []domain.Store{want}}, ttl)
+	repo.Stores(context.Background())
+	got, _ := repo.Stores(context.Background())
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
 
-func (storesOnly) Stores(context.Context) ([]domain.Store, error) {
+type storesOnly struct {
+	app.Repo
+	calls  atomic.Int32
+	stores []domain.Store
+}
+
+func (s *storesOnly) Stores(context.Context) ([]domain.Store, error) {
+	s.calls.Add(1)
+	if s.stores != nil {
+		return s.stores, nil
+	}
 	return []domain.Store{{ID: 1, Label: "A"}}, nil
 }

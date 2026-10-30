@@ -19,6 +19,7 @@ export default function () {
   expectOk.health(get('/healthz'))
   expectOk.meta(get('/api/meta'))
   expectOk.stores(get('/api/stores'))
+  expectOk.presets(get('/api/presets'))
 
   expectOk.kpis(get(`/api/kpis?${window30}`))
   expectOk.kpis(get('/api/kpis')) // no parameters: the default window
@@ -30,12 +31,16 @@ export default function () {
   }
   expectOk.films(get(`/api/top/films?${window30}&limit=5`), 5)
   expectOk.films(get('/api/top/films'), 10)
-  // Wide window with a clear winner, so a list ranked the wrong way round is noticed.
-  expectOk.films(get('/api/top/films?from=2022-01-01&to=2022-07-27&limit=5'), 5, { spread: true })
+  // Wide window (the "All data" range) with a clear winner, so a list ranked the wrong way round is noticed.
+  expectOk.films(get('/api/top/films?from=2022-01-23&to=2022-07-27&limit=5'), 5, { spread: true })
 
   // Bad input is refused with a problem body, not a 500.
   expectOk.problem(400)(getExpecting(400, '/api/kpis?from=nope', '/api/kpis (bad date)'))
   expectOk.problem(400)(getExpecting(400, '/api/kpis?from=2022-07-02&to=2022-07-01', '/api/kpis (reversed)'))
+  // Only the ranges from /api/presets are accepted: any other window, or half a window, is refused.
+  expectOk.problem(400)(getExpecting(400, '/api/kpis?from=2022-03-05&to=2022-03-20', '/api/kpis (not an offered range)'))
+  expectOk.problem(400)(getExpecting(400, '/api/kpis?from=2022-06-29&to=2022-07-27', '/api/kpis (off by one day)'))
+  expectOk.problem(400)(getExpecting(400, '/api/kpis?from=2022-06-28', '/api/kpis (only from)'))
   expectOk.problem(400)(getExpecting(400, '/api/revenue?granularity=year', '/api/revenue (bad granularity)'))
   expectOk.problem(400)(getExpecting(400, '/api/top/films?limit=999', '/api/top/films (bad limit)'))
   expectOk.status(404)(getExpecting(404, '/api/nope', '/api/nope'))

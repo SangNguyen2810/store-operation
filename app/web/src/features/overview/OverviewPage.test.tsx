@@ -1,6 +1,7 @@
 import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { RANGES, makeStore } from '../../test/fixtures'
 import { renderWithProviders } from '../../test/utils'
 import { OverviewPage } from './OverviewPage'
 
@@ -16,7 +17,8 @@ function mockApi(overrides: Record<string, () => Response> = {}) {
   const json = (body: unknown) => () => new Response(JSON.stringify(body), { status: 200 })
   const routes: Record<string, () => Response> = {
     '/api/meta': json({ asOf: '2022-07-27' }),
-    '/api/stores': json([{ id: 1, label: 'Boksburg, South Africa' }]),
+    '/api/presets': json(RANGES),
+    '/api/stores': json([makeStore(1, 'Boksburg, South Africa')]),
     '/api/kpis': json(kpis),
     '/api/revenue': json([{ bucket: '2022-07-27', storeId: 1, revenue: 100 }]),
     '/api/top/films': json([{ filmId: 1, title: 'ACADEMY DINOSAUR', rentals: 3, revenue: 12.5 }]),
@@ -50,7 +52,7 @@ describe('OverviewPage', () => {
     renderWithProviders(<OverviewPage />, '/?from=2022-03-01&to=2022-03-31&store=1&granularity=week')
 
     await kpiRevenue()
-    expect(screen.getByLabelText('From')).toHaveValue('2022-03-01')
+    expect(screen.getByLabelText('More ranges')).toHaveValue('2022-03')
     expect(screen.getByLabelText('Store')).toHaveValue('1')
     expect(calls).toContain('/api/revenue?from=2022-03-01&to=2022-03-31&store=1&granularity=week')
   })

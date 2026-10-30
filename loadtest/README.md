@@ -10,7 +10,7 @@ Two scripts drive the HTTP API with [k6](https://k6.io). They need a running gat
 
 ```sh
 brew install k6                      # once
-make dev                             # or the API and gateway: make dev-api, make dev-gateway
+make up                              # or the API and gateway: make dev-api, make dev-gateway
 make k6-smoke
 make k6-load
 BASE_URL=http://localhost:8081 make k6-load   # straight to the API, skipping the gateway

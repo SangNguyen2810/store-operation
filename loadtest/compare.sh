@@ -5,7 +5,7 @@
 #   + gateway     the same cached API, through the gateway (rate limit off, so the column shows the cost of the extra hop)
 #   service down  the API with a CACHE_URL nobody listens on: only its in-memory copy and Postgres
 # It starts and stops its own processes (ports 8190 to 8194) and uses Redis database 13 on REDIS_URL
-# (default: the Docker Redis from `REDIS_PORT=6380 make redis-up`). It needs Pagila reachable
+# (default: the Docker Redis from `make redis-up`). It needs Pagila reachable
 # (DATABASE_URL, default: the local one) and k6 on the PATH.
 set -euo pipefail
 cd "$(dirname "$0")/.."

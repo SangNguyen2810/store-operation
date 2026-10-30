@@ -1,19 +1,20 @@
 # The whole stack (run from the repo root with `-f infra/docker-compose.yml`, which `make up` does): Redis, the redis service, the API, the gateway and the web app. Pagila keeps its own compose file in
 # its own repo; the API reaches it on the host (override with DOCKER_DATABASE_URL).
 #
-#   make up      builds and starts everything; the app is at http://localhost:3000
+#   make up      builds and starts Redis, the redis service, the API and the gateway (http://localhost:8080); `make dev` runs the web app
+#   make up-all  also builds and starts the web app, at http://localhost:3000
 #   make down    stops it
 #
+# Redis is published on host port 6380 (not 6379, which a local Redis often holds); change it with REDIS_PORT.
 # `make redis-up` starts just Redis, for running the redis service directly with `make dev-redis`
-# (REDIS_URL=redis://localhost:6379). If 6379 is taken, pick another host port:
-# `REDIS_PORT=6380 make redis-up`, and use REDIS_URL=redis://localhost:6380.
+# (REDIS_URL=redis://localhost:6380).
 name: store-operation
 
 services:
   redis:
     image: redis:7-alpine
     ports:
-      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6380}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

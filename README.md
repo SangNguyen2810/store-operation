@@ -41,27 +41,27 @@ Store Operations Dashboard gives staff a single page to answer three questions: 
 **Prerequisites:** Go 1.25+, Node.js 22+, and a Pagila database reachable on `localhost:5432`. To start Pagila, run `docker compose up -d pagila` from the [Pagila repo](https://github.com/devrimgunduz/pagila).
 
 ```sh
-make install   # install web dependencies
-make dev       # API on :8081, gateway on :8080, web on :5173
+make install   # install web dependencies, once
+make up        # the backend in Docker: Redis, redis service, API and gateway (:8080), cache on
+make dev       # the web dev server on :5173
 ```
 
-Open <http://localhost:5173>. The browser talks to the gateway on `:8080`, which forwards to the API on `:8081`.
+Open <http://localhost:5173>. The browser talks to the gateway on `:8080`, which forwards to the API. `make down` stops the backend. The API container reaches Pagila on the host; set `DOCKER_DATABASE_URL` if yours is elsewhere. `GATEWAY_PORT`, `WEB_PORT` and `REDIS_PORT` change the published ports (defaults 8080, 3000 and 6380).
 
-**Or run everything in Docker** (Redis with the cache on, the redis service, the API, the gateway and the web app), with Pagila still running on `localhost:5432`:
+**Everything in Docker, web app included:** `make up-all`, then open <http://localhost:3000>.
 
-```sh
-make up        # builds the images and starts the stack
-make down      # stops it
-```
+**No Docker for the backend:** `make dev-local` runs the API, the gateway and the web server as local processes, without the cache.
 
-Open <http://localhost:3000>. The API container reaches Pagila on the host; set `DOCKER_DATABASE_URL` if yours is elsewhere. `GATEWAY_PORT` and `WEB_PORT` change the published ports (defaults 8080 and 3000).
+**If something is already on a port.** The stack publishes the gateway on `8080`, Redis on `6380` and (with `make up-all`) the web app on `3000`, all on `127.0.0.1`; change them with `GATEWAY_PORT`, `REDIS_PORT` and `WEB_PORT`. A leftover process on `8080` is easy to miss: if it listens on all interfaces, `localhost` can resolve to it (over IPv6) instead of the gateway container, and the web app then shows errors such as "Couldn't load the date ranges: Not Found". Check with `lsof -nP -iTCP:8080 -sTCP:LISTEN` and stop whatever is not the gateway.
 
 | Command | What it does |
 |---|---|
-| `make dev` | Runs the API, the gateway and the web dev server together |
+| `make up` / `make down` | Starts or stops the backend in Docker (Redis, redis service, API, gateway on `:8080`) |
+| `make dev` | Runs the web dev server on `:5173`; needs `make up` first |
+| `make up-all` | Like `make up`, plus the web app in a container at <http://localhost:3000> |
+| `make dev-local` | Runs the API, the gateway and the web dev server as local processes, without the cache |
 | `make dev-redis` | Runs the [redis service](#redis-service) on `:8082`, in front of a Redis from `make redis-up` |
 | `make seed-presets` | Stores [`infra/presets.json`](infra/presets.json) in Redis as the list of date ranges (see [Date ranges](#date-ranges)) |
-| `make up` / `make down` | Builds and starts, or stops, the whole stack in Docker (Redis, redis service, API, gateway, web) at <http://localhost:3000> |
 | `make test` | Runs the Go and web tests (see [Testing](#testing) for all kinds of tests) |
 | `make lint` | `gofmt`, `go vet`, and `oxlint` |
 | `make typecheck` | TypeScript project build check |
@@ -920,8 +920,8 @@ Mobile-first with two breakpoints, `sm` (640 px) and `lg` (1024 px). Anything CS
 The cache is optional and off by default. With it on, the heaviest read queries (key figures, revenue and top films) and the store details are served from Redis for a while instead of being recomputed. The API does not talk to Redis itself: it calls the [redis service](#redis-service) over HTTP.
 
 ```sh
-make redis-up                                     # or REDIS_PORT=6380 make redis-up if 6379 is taken
-make dev-redis                                    # the redis service on :8082 (REDIS_URL=redis://localhost:6380 if you moved Redis)
+make redis-up                                     # Redis on localhost:6380
+REDIS_URL=redis://localhost:6380 make dev-redis   # the redis service on :8082
 CACHE_URL=http://localhost:8082 make dev-api
 ```
 
@@ -929,14 +929,14 @@ CACHE_URL=http://localhost:8082 make dev-api
 - **Many requests at once.** Identical requests that arrive together cause a single database query.
 - **If the redis service or Redis is down** the API keeps working. It keeps a copy (at most 500 entries) of what it recently read or stored, and while the service is unavailable it answers from that copy until each entry's own expiry; after that, or for something it never saw, it queries Postgres. It does not ask the service again for 5 seconds after a failure, so an outage costs requests nothing extra, and it returns to the service by itself. A key the healthy service says is gone is dropped from the copy, so the copy never outlives the service's own answer.
 - **No invalidation.** The data is static (as of 2022-07-27), so entries just expire. With live data you would want a short TTL.
-- **What to expect.** One heavy query takes about 20 ms on this dataset, so a single user will not notice. Under load it matters more: in a local run with 20 simulated users (`make k6-compare`), the average response time dropped from about 6.3 ms to 2.3 ms and the p95 from about 16 ms to 6 ms, with 97.6% of lookups served from the cache. The same run with the redis service down averaged 0.9 ms: the in-memory copy skips the network hop, which is also why a real deployment would often keep such a copy in front of a shared cache. That is an indication from one laptop, not a benchmark.
+- **What to expect.** One heavy query takes about 20 ms on this dataset, so a single user will not notice. Under load it matters more: in a local run with 20 simulated users (`make k6-compare`), the average response time dropped from about 6.3 ms to 2.3 ms and the p95 from about 16 ms to 6 ms, with 97.6% of lookups served from the cache. The same run with the redis service down averaged 0.9 ms: the in-memory copy skips the network hop. That is an indication from one laptop, not a benchmark.
 - **Logs.** With the cache on, each lookup logs a `cache` line with the outcome `hit`, `miss`, `coalesced` or `fallback`, and the first failure of the service logs one warning.
 
 ## Date ranges
 
 The ranges the UI offers are data, not code. The API turns a list of definitions into concrete windows measured from the as-of date, serves them at [`GET /api/presets`](#get-apipresets), and refuses any other window.
 
-- **Where the list lives.** In Redis, under the key `config:presets:v1`, as JSON, with no expiry. If Redis holds no list, or the stored one is unusable (bad JSON, no default, a duplicate id, a range over 366 days), the API uses the built-in list and logs why. Today the list is read-only for the app; put one there yourself:
+- **Where the list lives.** In Redis, under the key `config:presets:v1`, as JSON, with no expiry. If Redis holds no list, or the stored one is unusable (bad JSON, no default, a duplicate id, a range over 366 days), the API uses the built-in list and logs why. The API only reads the list; store one yourself:
 
   ```sh
   make seed-presets                                  # stores infra/presets.json, which is the built-in list; edit it first
@@ -1096,7 +1096,7 @@ Set `E2E_DATABASE_URL` if your Pagila is not at the default address. A failing r
 
 ### API load tests (k6)
 
-Install [k6](https://k6.io) once (`brew install k6`), and have the API and gateway running (`make dev`; or `make dev-api` and `make dev-gateway`).
+Install [k6](https://k6.io) once (`brew install k6`), and have the API and gateway running (`make up`; or `make dev-api` and `make dev-gateway`).
 
 ```sh
 make k6-smoke                                  # one user, every endpoint, answers checked (about a second)
@@ -1107,7 +1107,7 @@ make k6-compare                                # the same load without the cache
 
 The tests go to the gateway on `:8080` by default. `make k6-load` sends more requests per second from one address than the gateway's default limit allows, so start the gateway with the limit off: `RATE_LIMIT_RPS=0 make dev-gateway`.
 
-`make k6-smoke` fails if any answer has the wrong status, content type or shape, or if a window that is not an offered range is not refused. `make k6-load` fails if the p95 response time is over 200 ms (250 ms for a single endpoint) or more than 1% of requests fail; it uses the built-in ranges, so a different list in Redis may make it fail with `400`s. `make k6-compare` starts its own APIs, redis service and gateway, so it needs Redis running (`REDIS_PORT=6380 make redis-up`), and prints a table of response times without the cache, with it, with it through the gateway, and with the redis service down, plus how many lookups the cache served. More detail is in [loadtest/README.md](loadtest/README.md).
+`make k6-smoke` fails if any answer has the wrong status, content type or shape, or if a window that is not an offered range is not refused. `make k6-load` fails if the p95 response time is over 200 ms (250 ms for a single endpoint) or more than 1% of requests fail; it uses the built-in ranges, so a different list in Redis may make it fail with `400`s. `make k6-compare` starts its own APIs, redis service and gateway, so it needs Redis running (`make redis-up`), and prints a table of response times without the cache, with it, with it through the gateway, and with the redis service down, plus how many lookups the cache served. More detail is in [loadtest/README.md](loadtest/README.md).
 
 ### Continuous integration
 

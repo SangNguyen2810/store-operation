@@ -1,12 +1,15 @@
 COMPOSE := docker compose -f infra/docker-compose.yml
 
-.PHONY: seed-presets install dev dev-api dev-gateway dev-redis dev-web up down redis-up redis-down test test-api test-gateway test-redis test-web cover-api cover-gateway cover-redis cover-web e2e e2e-install k6-smoke k6-load k6-compare lint typecheck build check
+.PHONY: seed-presets install dev dev-local dev-api dev-gateway dev-redis dev-web up up-all down redis-up redis-down test test-api test-gateway test-redis test-web cover-api cover-gateway cover-redis cover-web e2e e2e-install k6-smoke k6-load k6-compare lint typecheck build check
 
 install:
 	cd app/web && npm install
 
-# Runs the API (:8081), the gateway (:8080) and the web dev server (:5173) together. Ctrl-C stops all.
-dev:
+# The web dev server (:5173), talking to the gateway on :8080. Start the backend first with `make up`.
+dev: dev-web
+
+# Without Docker: the API (:8081), the gateway (:8080) and the web dev server (:5173) as local processes, no cache. Ctrl-C stops all.
+dev-local:
 	$(MAKE) -j3 dev-api dev-gateway dev-web
 
 dev-api:
@@ -22,8 +25,13 @@ dev-redis:
 dev-web:
 	cd app/web && npm run dev
 
-# The whole stack in Docker (Redis, API, gateway, web): http://localhost:3000. Needs Pagila on localhost:5432.
+# The backend in Docker (Redis, redis service, API, gateway) with the cache on; the gateway is http://localhost:8080.
+# Needs Pagila on localhost:5432. Then `make dev` for the web app.
 up:
+	$(COMPOSE) up -d --build --wait redis redis-service api gateway
+
+# Everything in Docker, including the web app: http://localhost:3000.
+up-all:
 	$(COMPOSE) up -d --build --wait
 
 down:
@@ -87,7 +95,7 @@ k6-smoke:
 k6-load:
 	k6 run loadtest/load.js
 
-# Starts its own APIs, without and with Redis, and compares them (needs `REDIS_PORT=6380 make redis-up`).
+# Starts its own APIs, without and with Redis, and compares them (needs `make redis-up`).
 k6-compare:
 	./loadtest/compare.sh
 

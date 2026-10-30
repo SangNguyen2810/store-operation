@@ -2,7 +2,7 @@
 
 A portfolio project for a Principal Frontend Engineer interview (React/Vue role), built on the Pagila DVD-rental database. It is meant to be walked through on screen as a code sample, so the plan favours clear structure and explainable trade-offs over feature count.
 
-**Status:** Phase 1 is built, verified, and published to GitHub with a CI workflow. A testing push came before the gateway (section 11) and is complete: Go unit tests (the backend integration tests were later removed), web unit and integration tests with a coverage gate, Playwright end-to-end tests, and k6. Phase 2, an API gateway plus a Redis cache (section 10), is done: the cache is in the API and the gateway is its own service in `gateway/`, with Docker images and a compose stack for the whole system. The repository was then restructured into a monorepo (section 13): `app/` for the services, `infra/` for Docker, and one CI workflow per piece. Redis then became a service of its own, the cache went over HTTP with an in-memory fallback, and the date ranges and store details became server-driven (section 14, all five phases done). The full microservices split (one binary per context, separate databases) is not started.
+**Status:** Phase 1 is built, verified, and published to GitHub with a CI workflow. A testing push came before the gateway (section 11) and is complete: Go unit tests (the backend integration tests were later removed), web unit and integration tests with a coverage gate, Playwright end-to-end tests, and k6. Phase 2, an API gateway plus a Redis cache (section 10), is done: the cache is in the API and the gateway is its own service in `gateway/`, with Docker images and a compose stack for the whole system. The repository was then restructured into a monorepo (section 13): `app/` for the services, `infra/` for Docker, and one CI workflow per piece. Redis then became a service of its own, the cache went over HTTP with an in-memory fallback, and the date ranges and store details became server-driven (section 14, all five phases done), and the Makefile was reshaped so `make up` runs the backend in Docker and `make dev` runs only the web app (section 15). Everything is pushed; no GitHub workflow has been looked at yet. The full microservices split (one binary per context, separate databases) is not started.
 
 ---
 
@@ -410,7 +410,7 @@ Each phase ships and is verified on its own; stop for a go-ahead after each.
 
 ## 12. Next steps, in order
 
-1. Push and check the first CI run on GitHub (five workflows: api, gateway, redis, web, stack, with e2e, k6 and docker jobs in stack) and fix what fails.
+1. (pushed) Look at the first CI run on GitHub: `gh` is not installed here, so read the Actions page by hand, or `brew install gh`. Check the first CI run (five workflows: api, gateway, redis, web, stack, with e2e, k6 and docker jobs in stack) and fix what fails.
 2. (done) The testing work in section 11.
 3. (done) Phase 2: gateway and Redis cache (section 10).
 4. Later: splitting the packages into binaries and databases.
@@ -502,3 +502,24 @@ loadtest/  docs/  Makefile  .env.example  .github/
 - Verified in Docker: the whole stack up and healthy, `/api/presets` through the web container, the cache filling Redis, the redis service stopped and the API still answering (from memory, and from Postgres for a new window), then started again; the k6 smoke test passed through the gateway (37 of 37 checks).
 - Mutation check on the new Go code: 21 deliberate breakages (cache fallback, retry delay, memory limit, header parsing, quarter and month maths, validation, list handling); three survived at first and each exposed a missing assertion (a miss dropping the memory copy, the reason for half a window, the cache copy used at refresh), which were added; all 21 are now caught.
 - Not done: no workflow, including the new ones, has run on GitHub; the nginx container is only checked by hand; in the Docker stack all browsers share one rate-limit bucket (the web container's address).
+
+---
+
+## 15. Done: Makefile reshaped for daily use (notes for me, not for the README)
+
+**Request.** `make up` should run everything including Redis, and `make dev` should only run the web.
+
+- `make up` = Redis, redis service, API, gateway in Docker (gateway on `127.0.0.1:8080`). `make dev` = `dev-web` only (Vite on :5173, proxy to :8080). `make up-all` = old `up` with the web container on :3000. `make dev-local` = old `dev` (API, gateway, web as local processes, no cache).
+- Redis host port default moved from 6379 to 6380 in compose, because 6379 was taken by a local Redis on this machine (`make up` failed with "address already in use"). Inside Docker nothing changes. `loadtest/compare.sh` already used 6380, so `REDIS_PORT=6380` is no longer needed anywhere.
+- Gotcha that cost time: an old API binary (PID 23997, started Oct 24) was still listening on `*:8080` over IPv6. Docker binds `127.0.0.1:8080` (IPv4). Vite and browsers resolve `localhost` to `::1` first, so the web app talked to the old binary: `/api/meta` returned 200 (it existed then) and `/api/presets` returned 404, shown as "Couldn't load the date ranges: Not Found". Killing it fixed it. The README has a short "If something is already on a port" note, written as a general tip without this story.
+- Docs touched: README quick start and command table, `.env.example`, compose header comments, `loadtest/README.md`.
+
+**README policy (from the request after this).** The README is read by interviewers, so it is written like a colleague's project doc: what it is, how to run it, how it works. No decision history, no plans, no "not done" lists, no talk of what was discussed. All of that stays here in PLAN.md. If something in the README starts to read like a plan, move it here.
+
+**Open items, for me**
+- Nobody has looked at the GitHub Actions runs yet. The new `redis.yml` and the changed `api.yml`/`stack.yml` are the likeliest to need a fix.
+- Presets are read-only for now. A write path (PUT with an admin token, via the redis service's `config:` keys) was left for later.
+- The Docker web container shares one rate-limit bucket for all browsers (it is the gateway's only client).
+- Two ranges with identical dates (`last-quarter` and `2022-q2`) show as the first one in the UI.
+- nginx in the web container was only checked by hand.
+

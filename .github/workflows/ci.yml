@@ -1,0 +1,178 @@
+name: CI
+
+# One pipeline for the whole repo. Every job runs a `make` target that also works locally (`make ci`, `make ci-full`),
+# so a green `make ci` means a green pipeline. Require the `ci-ok` job in branch protection.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    # gofmt, vet, tests with the coverage floors, the race detector and a build, for each Go service.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [analytics, stores, ranges, gateway, redis]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app/${{ matrix.service }}/go.mod
+          cache-dependency-path: app/${{ matrix.service }}/go.mod
+      - run: make ci-go-${{ matrix.service }}
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/web/package-lock.json
+      - run: npm ci
+        working-directory: app/web
+      - run: make ci-web
+
+  docker:
+    # Builds every image in the stack, so a broken Dockerfile or compose file fails here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make ci-docker
+
+  e2e:
+    runs-on: ubuntu-latest
+    # The real stack in a real browser: Pagila <- stores, ranges, analytics <- gateway <- the production web build.
+    env:
+      E2E_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: app/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/load-pagila
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app/analytics/go.mod
+          cache-dependency-path: app/analytics/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/web/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            app/web/playwright-report
+            app/web/test-results
+          retention-days: 7
+
+  k6:
+    runs-on: ubuntu-latest
+    # The k6 smoke test through the gateway to the real services and Pagila. The load test is not run here: runner timings are too noisy for a latency threshold.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/load-pagila
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app/analytics/go.mod
+          cache-dependency-path: app/analytics/go.sum
+      - uses: grafana/setup-k6-action@v1
+      - name: Start the services and the gateway
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: |
+          for svc in stores ranges analytics gateway; do (cd app/$svc && go build -o bin/$svc ./cmd/$svc); done
+          ADDR=:8081 ./app/stores/bin/stores > stores.log 2>&1 &
+          ADDR=:8083 ./app/ranges/bin/ranges > ranges.log 2>&1 &
+          ADDR=:8084 RANGES_URL=http://localhost:8083 ./app/analytics/bin/analytics > analytics.log 2>&1 &
+          UPSTREAM_URL=http://localhost:8084 ROUTES=/api/stores=http://localhost:8081,/api/presets=http://localhost:8083 ./app/gateway/bin/gateway > gateway.log 2>&1 &
+          for _ in $(seq 50); do curl -sf localhost:8080/healthz && curl -sf localhost:8080/api/stores >/dev/null && curl -sf localhost:8080/api/presets >/dev/null && exit 0; sleep 0.2; done
+          cat stores.log ranges.log analytics.log gateway.log; exit 1
+      - run: k6 run loadtest/smoke.js
+
+  ci-ok:
+    # The one check to require. It fails if any job above failed or was cancelled.
+    if: always()
+    needs: [go, web, docker, e2e, k6]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job must have succeeded
+        run: |
+          echo '${{ toJSON(needs) }}'
+          test "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" = "false"
+
+  publish:
+    # Pushes the images to GitHub Container Registry after a green run on main or a version tag; never on pull requests.
+    if: github.event_name == 'push'
+    needs: ci-ok
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [analytics, stores, ranges, gateway, redis, web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/store-operation-${{ matrix.service }}
+          tags: |
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+      - uses: docker/build-push-action@v6
+        with:
+          context: app/${{ matrix.service }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max

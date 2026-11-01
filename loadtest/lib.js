@@ -2,8 +2,16 @@
 import http from 'k6/http'
 import { check } from 'k6'
 
-// Point this at the API, or later at the gateway, with BASE_URL=http://host:port.
-export const BASE_URL = (__ENV.BASE_URL || 'http://localhost:8080').replace(/\/$/, '')
+// Point this at the gateway with BASE_URL=http://host:port.
+const trim = (u) => u.replace(/\/$/, '')
+export const BASE_URL = trim(__ENV.BASE_URL || 'http://localhost:8080')
+
+// When BASE_URL is a single service rather than the gateway, the endpoints it does not serve
+// can be sent to their own service: STORES_URL for /api/stores, RANGES_URL for /api/presets.
+const OTHER = {
+  '/api/stores': __ENV.STORES_URL && trim(__ENV.STORES_URL),
+  '/api/presets': __ENV.RANGES_URL && trim(__ENV.RANGES_URL),
+}
 
 // "off" or "on": which cache setup the API under test has. It only labels the results,
 // so runs against a cached and an uncached API can be told apart.
@@ -16,7 +24,8 @@ const ok = http.expectedStatuses({ min: 200, max: 299 })
 const okOr = (...codes) => http.expectedStatuses({ min: 200, max: 299 }, ...codes)
 
 export function get(path, { name, expect = ok } = {}) {
-  return http.get(`${BASE_URL}${path}`, {
+  const base = OTHER[path.split('?')[0]] || BASE_URL
+  return http.get(`${base}${path}`, {
     tags: { name: name || path.split('?')[0] },
     responseCallback: expect,
   })

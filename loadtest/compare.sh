@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Runs load.js four times and prints the latencies side by side, with the cache hit ratio of each run:
-#   no cache      the API straight to Postgres
-#   cache         the API with the redis service and Redis
-#   + gateway     the same cached API, through the gateway (rate limit off, so the column shows the cost of the extra hop)
-#   service down  the API with a CACHE_URL nobody listens on: only its in-memory copy and Postgres
-# It starts and stops its own processes (ports 8190 to 8194) and uses Redis database 13 on REDIS_URL
+#   no cache      the analytics service straight to Postgres
+#   cache         the analytics service with the redis service and Redis
+#   + gateway     the same cached service, through the gateway (rate limit off, so the column shows the cost of the extra hop)
+#   service down  the analytics service with a CACHE_URL nobody listens on: only its in-memory copy and Postgres
+# The stores and ranges services run once, without a cache, and answer /api/stores and /api/presets for every column.
+# It starts and stops its own processes (ports 8190 to 8197) and uses Redis database 13 on REDIS_URL
 # (default: the Docker Redis from `make redis-up`). It needs Pagila reachable
 # (DATABASE_URL, default: the local one) and k6 on the PATH.
 set -euo pipefail
@@ -16,7 +17,9 @@ pids=()
 cleanup() { for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null || true; done; rm -rf "$out"; }
 trap cleanup EXIT
 
-(cd app/api && go build -o "$out/api" ./cmd/api)
+(cd app/analytics && go build -o "$out/analytics" ./cmd/analytics)
+(cd app/stores && go build -o "$out/stores" ./cmd/stores)
+(cd app/ranges && go build -o "$out/ranges" ./cmd/ranges)
 (cd app/gateway && go build -o "$out/gateway" ./cmd/gateway)
 (cd app/redis && go build -o "$out/redis-service" ./cmd/redis)
 
@@ -25,9 +28,9 @@ wait_for() { # url, name, log
   echo "$2 did not start:"; cat "$3"; exit 1
 }
 start_api() { # port, cache url or empty
-  ADDR=":$1" CACHE_URL="$2" "$out/api" >"$out/api-$1.log" 2>&1 &
+  ADDR=":$1" CACHE_URL="$2" RANGES_URL=http://localhost:8196 "$out/analytics" >"$out/api-$1.log" 2>&1 &
   pids+=("$!")
-  wait_for "http://localhost:$1/healthz" "API on :$1" "$out/api-$1.log"
+  wait_for "http://localhost:$1/healthz" "analytics on :$1" "$out/api-$1.log"
 }
 
 # Start from a cold cache so the first requests miss.
@@ -37,21 +40,28 @@ ADDR=:8193 REDIS_URL="$REDIS_URL" "$out/redis-service" >"$out/redis-service.log"
 pids+=("$!")
 wait_for http://localhost:8193/healthz "the redis service" "$out/redis-service.log"
 
+ADDR=:8195 "$out/stores" >"$out/stores.log" 2>&1 &
+pids+=("$!")
+wait_for http://localhost:8195/healthz "stores" "$out/stores.log"
+ADDR=:8196 "$out/ranges" >"$out/ranges.log" 2>&1 &
+pids+=("$!")
+wait_for http://localhost:8196/healthz "ranges" "$out/ranges.log"
+
 start_api 8191 ""
 start_api 8192 http://localhost:8193
 start_api 8194 http://localhost:1 # nothing listens: the service is "down"
 
-ADDR=:8190 UPSTREAM_URL=http://localhost:8192 RATE_LIMIT_RPS=0 "$out/gateway" >"$out/gateway.log" 2>&1 &
+ADDR=:8190 UPSTREAM_URL=http://localhost:8192 ROUTES=/api/stores=http://localhost:8195,/api/presets=http://localhost:8196 RATE_LIMIT_RPS=0 "$out/gateway" >"$out/gateway.log" 2>&1 &
 pids+=("$!")
 wait_for http://localhost:8190/healthz "the gateway" "$out/gateway.log"
 
-# Cache outcomes an API logged since line $2 of its log: "hit miss coalesced fallback".
+# Cache outcomes an analytics service logged since line $2 of its log: "hit miss coalesced fallback".
 outcomes() { tail -n +"$(($2 + 1))" "$out/api-$1.log" | grep -o 'outcome=[a-z]*' | sort | uniq -c | awk '{c[$2]=$1} END {printf "%d %d %d %d", c["outcome=hit"], c["outcome=miss"], c["outcome=coalesced"], c["outcome=fallback"]}'; }
 
 run() { # label, port, cache tag, label of the API whose log to read (or empty)
   local from=0
   [ -n "$4" ] && from=$(wc -l <"$out/api-$4.log")
-  k6 run --quiet --summary-export="$out/$1.json" -e BASE_URL="http://localhost:$2" -e CACHE="$3" loadtest/load.js >"$out/$1.txt" 2>&1 || true
+  k6 run --quiet --summary-export="$out/$1.json" -e BASE_URL="http://localhost:$2" -e STORES_URL=http://localhost:8195 -e RANGES_URL=http://localhost:8196 -e CACHE="$3" loadtest/load.js >"$out/$1.txt" 2>&1 || true
   if [ -n "$4" ]; then outcomes "$4" "$from" >"$out/$1.outcomes"; else echo "0 0 0 0" >"$out/$1.outcomes"; fi
 }
 echo "Running load.js without the cache (about 45 s)…";        run off 8191 off ""
@@ -91,6 +101,6 @@ for n, _ in names:
     total = hit + miss + coal + fb
     ratios.append("-" if total == 0 else "%.1f%%" % ((hit + fb) / total * 100))
 print(f"{'served from cache':18}" + "".join(f"{c:>22}" for c in ratios))
-print("\n(milliseconds; hit = redis service, mem = the API's in-memory copy, coal = joined a query already running;")
+print("\n(milliseconds; hit = redis service, mem = the service's in-memory copy, coal = joined a query already running;")
 print(" one local run is an indication, not a benchmark)")
 PY

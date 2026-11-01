@@ -1,7 +1,7 @@
-# The whole stack (run from the repo root with `-f infra/docker-compose.yml`, which `make up` does): Redis, the redis service, the API, the gateway and the web app. Pagila keeps its own compose file in
-# its own repo; the API reaches it on the host (override with DOCKER_DATABASE_URL).
+# The whole stack (run from the repo root with `-f infra/docker-compose.yml`, which `make up` does): Redis, the redis service, the stores, ranges and analytics services, the gateway and the web app.
+# Pagila keeps its own compose file in its own repo; stores and analytics reach it on the host (override with DOCKER_DATABASE_URL).
 #
-#   make up      builds and starts Redis, the redis service, the API and the gateway (http://localhost:8080); `make dev` runs the web app
+#   make up      builds and starts everything but the web app; the gateway is http://localhost:8080 and `make dev` runs the web app
 #   make up-all  also builds and starts the web app, at http://localhost:3000
 #   make down    stops it
 #
@@ -36,16 +36,37 @@ services:
       timeout: 3s
       retries: 10
 
-  api:
-    build: ../app/api
+  # Serves GET /api/kpis, /api/revenue, /api/top/films and /api/meta.
+  # It asks the ranges service which date ranges are allowed, and uses the built-in list when that service is down, so ranges is only a start-up order.
+  analytics:
+    build: ../app/analytics
+    environment:
+      ADDR: ":8084"
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgres://postgres:123456@host.docker.internal:5432/postgres}
+      CACHE_URL: http://redis-service:8082
+      RANGES_URL: http://ranges:8083
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis-service:
+        condition: service_healthy
+      ranges:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8084/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Serves GET /api/stores.
+  stores:
+    build: ../app/stores
     environment:
       ADDR: ":8081"
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgres://postgres:123456@host.docker.internal:5432/postgres}
       CACHE_URL: http://redis-service:8082
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # The API also starts without the redis service (it falls back to an in-memory copy), so this is
-    # only a start-up order.
     depends_on:
       redis-service:
         condition: service_healthy
@@ -55,15 +76,36 @@ services:
       timeout: 3s
       retries: 10
 
+  # Serves GET /api/presets.
+  ranges:
+    build: ../app/ranges
+    environment:
+      ADDR: ":8083"
+      CACHE_URL: http://redis-service:8082
+    depends_on:
+      redis-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8083/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   gateway:
     build: ../app/gateway
     environment:
       ADDR: ":8080"
-      UPSTREAM_URL: http://api:8081
+      # Everything not claimed below, /healthz included, goes to analytics.
+      UPSTREAM_URL: http://analytics:8084
+      ROUTES: /api/stores=http://stores:8081,/api/presets=http://ranges:8083
     ports:
       - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
     depends_on:
-      api:
+      analytics:
+        condition: service_healthy
+      stores:
+        condition: service_healthy
+      ranges:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/healthz"]

@@ -296,3 +296,37 @@ func TestClientGoneIsNotAnError(t *testing.T) {
 		t.Errorf("a cancelled request got a body: %s", rec.Body)
 	}
 }
+
+func TestRoutesSendPrefixesToTheirOwnUpstream(t *testing.T) {
+	named := func(name string) *httptest.Server {
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, name+" "+r.URL.Path+"?"+r.URL.RawQuery)
+		}))
+		t.Cleanup(s.Close)
+		return s
+	}
+	def, stores, top, health := named("default"), named("stores"), named("top"), named("health")
+	gw := httptest.NewServer(New(Options{
+		Upstream: mustURL(t, def.URL),
+		Routes: []Route{
+			{Prefix: "/api/stores", Upstream: mustURL(t, stores.URL)},
+			{Prefix: "/api/top/", Upstream: mustURL(t, top.URL)},
+			{Prefix: "/healthz", Upstream: mustURL(t, health.URL)},
+		},
+		DialTimeout: time.Second, HeaderTimeout: time.Second,
+	}))
+	t.Cleanup(gw.Close)
+
+	for path, want := range map[string]string{
+		"/api/stores?x=1":    "stores /api/stores?x=1",
+		"/api/stores/1":      "stores /api/stores/1?",
+		"/api/top/films?a=b": "top /api/top/films?a=b",
+		"/api/kpis?c=d":      "default /api/kpis?c=d",
+		"/api/storesx":       "default /api/storesx?",
+		"/healthz":           "health /healthz?",
+	} {
+		if got := body(t, get(t, gw.URL+path)); got != want {
+			t.Errorf("GET %s = %q, want %q", path, got, want)
+		}
+	}
+}

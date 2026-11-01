@@ -33,6 +33,7 @@ func run() error {
 		Addr: cfg.Addr,
 		Handler: gateway.New(gateway.Options{
 			Upstream:      cfg.Upstream,
+			Routes:        cfg.Routes,
 			RatePerSec:    cfg.RatePerSec,
 			Burst:         cfg.Burst,
 			DialTimeout:   cfg.DialTimeout,
@@ -47,7 +48,7 @@ func run() error {
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	slog.Info("listening", "addr", cfg.Addr, "upstream", cfg.Upstream.String(), "rateLimit", cfg.RatePerSec)
+	slog.Info("listening", "addr", cfg.Addr, "upstream", cfg.Upstream.String(), "routes", len(cfg.Routes), "rateLimit", cfg.RatePerSec)
 
 	select {
 	case err := <-errc:

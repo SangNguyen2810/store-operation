@@ -6,11 +6,22 @@ package gateway
 import (
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
+// Route sends the requests under Prefix (an exact path and everything below
+// it, such as /api/stores) to Upstream instead of the default one.
+type Route struct {
+	Prefix   string
+	Upstream *url.URL
+}
+
 type Options struct {
-	Upstream      *url.URL
+	// Upstream takes /api/ and /healthz, and everything a Route does not claim.
+	Upstream *url.URL
+	// Routes are checked first; the longest matching prefix wins.
+	Routes        []Route
 	RatePerSec    float64 // 0 turns the rate limit off
 	Burst         int
 	DialTimeout   time.Duration
@@ -24,9 +35,19 @@ type Options struct {
 // are logged too.
 func New(o Options) http.Handler {
 	proxy := newProxy(o.Upstream, o.DialTimeout, o.HeaderTimeout)
+	// A map, so a route for /healthz replaces the default instead of clashing with it.
+	handlers := map[string]http.Handler{"/api/": proxy, "/healthz": proxy}
+	for _, r := range o.Routes {
+		p := newProxy(r.Upstream, o.DialTimeout, o.HeaderTimeout)
+		handlers[r.Prefix] = p
+		if !strings.HasSuffix(r.Prefix, "/") {
+			handlers[r.Prefix+"/"] = p
+		}
+	}
 	mux := http.NewServeMux()
-	mux.Handle("/api/", proxy)
-	mux.Handle("/healthz", proxy)
+	for pattern, h := range handlers {
+		mux.Handle(pattern, h)
+	}
 
 	var h http.Handler = mux
 	if o.RatePerSec > 0 {

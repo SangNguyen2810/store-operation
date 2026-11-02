@@ -51,6 +51,7 @@ The services in Docker reach Pagila on the host; set `DOCKER_DATABASE_URL` if yo
 
 
 ```mermaid
+## Architecture
 flowchart LR
     user([Staff member]) --> web["web<br/>React · TypeScript · Vite"]
     web -- "/api/*" --> gateway["gateway :8080<br/>routing · request id · access log<br/>rate limit · timeouts"]
@@ -85,6 +86,55 @@ How the pieces behave together:
 - **Request path.** Browser → gateway (id, rate limit, log) → the owning service → Pagila, optionally through the cache. The same `X-Request-Id` appears in the gateway's and the services' logs.
 
 ## Database
+
+### Web app
+
+`app/web` is React 19 + TypeScript (Vite), with TanStack Query for server state, React Router for the URL, Recharts for the chart and Tailwind CSS v4 for styling. Like the backend, dependencies point inward, and a test (`src/archtest.test.ts`, run by `npm test`) fails if they do not.
+
+```mermaid
+flowchart LR
+    pages["pages<br/>route-level screens"] --> features
+    features["features<br/>containers: call hooks, apply rules,<br/>map data to props"] --> components
+    features --> hooks["hooks<br/>one react-query hook per file<br/>+ URL state"]
+    hooks --> api["api<br/>typed client, one function per endpoint"]
+    features --> lib["lib<br/>formatting, filters"]
+    hooks --> lib
+    components["components<br/>pure UI: props in, JSX out"] --> lib
+    components --> chart["components/libs/recharts<br/>the only door to the chart library"]
+    lib --> api
+```
+
+```
+app/web/src/
+  routes.tsx, App.tsx, main.tsx   route table ("/" is the dashboard, anything else 404) and providers
+  pages/                          thin route-level screens (HomePage, NotFoundPage)
+  features/overview/              OverviewPage, the one container, plus the mapping helpers (kpis, films, storeDetails, pivot)
+  hooks/                          useMeta, useRanges, useStores, useKpis, useRevenue, useTopFilms, useFilters, queryKeys
+  components/                     one folder per component: Name.tsx, index.ts and Name.test.tsx
+    libs/recharts/                wrappers for the chart pieces we use, with our design defaults
+  api/                            typed client for the gateway's endpoints
+  lib/                            format, filters, useBreakpoint
+  index.css                       Tailwind import, light and dark colour tokens, a small base layer
+```
+
+| Layer | May import |
+|---|---|
+| `api` | itself |
+| `lib` | `api` (types only) |
+| `hooks` | `api`, `lib` |
+| `components` | other components and `lib`. Never `hooks`, `features`, `pages`, `api`, react-router or react-query |
+| `features` | `components`, `hooks`, `lib`, `api` |
+| `pages` | `features` and everything below |
+| `recharts` | only `components/libs/recharts` may import it |
+
+- **Pure UI.** A component takes plain props and knows nothing about films or filters. `KpiGrid` renders cards; `features/overview/kpis.ts` decides what they say. `OverviewPage` is the only place that calls the query hooks.
+- **Data flow.** The browser calls `/api/*` on the gateway only (Vite proxies it in dev, nginx in Docker). Each endpoint has one hook in its own file; cache keys live in `queryKeys.ts`. The date ranges and stores are loaded once and kept, and the figures refetch when the filters change while the previous data stays on screen.
+- **State lives in the URL.** `useFilters` reads and writes the range, store and grouping as query parameters, so a reload or a shared link restores the same view. A link to a range that has left the list falls back to the default range. There is no free date entry: the UI offers only what `GET /api/presets` returns.
+- **Each section stands alone.** `AsyncSection` handles loading, empty and error (with Retry) for one query, so one failing endpoint never takes down the page.
+- **One door to the chart library.** Everything charts need comes from `components/libs/recharts`, which sets the theme defaults. Swapping the library is a one-folder change. The chart is lazy-loaded.
+- **Styling.** Tailwind utilities next to the markup, with no custom class names or `@apply`. Light and dark colours are CSS variables exposed as utilities (`bg-surface`, `text-ink`, `text-muted`, `border-line`, and so on); dark mode follows the OS setting, so components never write `dark:` variants. State is styled from ARIA and data attributes, and tests read those attributes, never utility classes.
+- **Responsive.** Mobile-first with two breakpoints, `sm` (640 px) and `lg` (1024 px). On a phone the filters fold behind a **Filters** button, the key figures are 2 × 2 and the sections stack; on desktop the filters are one row and revenue sits beside top films. Touch targets are 44 px. CSS does the sizing; only the chart's pixel height reads the viewport (`useBreakpoint`).
+- **Accessibility.** Keyboard-reachable controls, trends shown by arrow and text (not colour alone), and the chart has a text summary and a "show data as a table" view.
 
 The app reads the [Pagila](https://github.com/devrimgunduz/pagila) sample database (PostgreSQL 17, `public` schema) and adds nothing to it. Row counts are from the sample data.
 

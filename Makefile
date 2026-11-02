@@ -1,7 +1,9 @@
 COMPOSE := docker compose -f infra/docker-compose.yml
 GO_SERVICES := analytics stores ranges gateway redis
+# The services whose Postgres adapters have tests against a real database.
+DB_SERVICES := analytics stores
 
-.PHONY: seed-presets install dev dev-analytics dev-stores dev-ranges dev-gateway dev-redis dev-web up up-all down redis-up redis-down test test-analytics test-stores test-ranges test-gateway test-redis test-web cover-analytics cover-stores cover-ranges cover-gateway cover-redis cover-web e2e e2e-install k6-smoke k6-load k6-compare lint typecheck build check ci ci-web ci-docker ci-full
+.PHONY: seed-presets install dev dev-analytics dev-stores dev-ranges dev-gateway dev-redis dev-web up up-all down redis-up redis-down test test-analytics test-stores test-ranges test-gateway test-redis test-web cover-analytics cover-stores cover-ranges cover-gateway cover-redis cover-web e2e e2e-install k6-smoke k6-load k6-compare lint typecheck build check ci ci-web ci-docker ci-full test-integration
 
 install:
 	cd app/web && npm install
@@ -148,6 +150,12 @@ ci-go-%:
 	cd app/$* && go test ./... -race -count=1
 	cd app/$* && go build ./...
 
+# The Postgres adapters against a real Pagila (build tag `integration`). DATABASE_URL defaults to localhost:5432; a missing database fails the run.
+test-integration:
+	@for svc in $(DB_SERVICES); do \
+		(cd app/$$svc && DATABASE_URL=$${DATABASE_URL:-postgres://postgres:123456@localhost:5432/postgres} go test -tags integration -count=1 ./internal/*/adapters/postgres/) || exit 1; \
+	done
+
 # Lint, typecheck, tests with the coverage floors, and the production build. Run `npm ci` in app/web first (CI does).
 ci-web:
 	cd app/web && npm run lint && npm run typecheck && npm run test:coverage && npm run build
@@ -161,6 +169,7 @@ ci: $(addprefix ci-go-,$(GO_SERVICES)) ci-web ci-docker
 
 # `make ci` plus the browser tests and the k6 smoke test through the gateway. Needs Pagila on localhost:5432 and k6.
 ci-full: ci
+	$(MAKE) test-integration
 	$(MAKE) e2e
 	$(MAKE) up
 	k6 run loadtest/smoke.js; status=$$?; $(MAKE) down; exit $$status

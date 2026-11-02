@@ -31,6 +31,33 @@ jobs:
           cache-dependency-path: app/${{ matrix.service }}/go.mod
       - run: make ci-go-${{ matrix.service }}
 
+  go-integration:
+    # The SQL of the Postgres adapters (analytics, stores) against a real Pagila, on the same commit the e2e and k6 jobs load.
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/load-pagila
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app/analytics/go.mod
+          cache-dependency-path: |
+            app/analytics/go.sum
+            app/stores/go.sum
+      - run: make test-integration
+
   web:
     runs-on: ubuntu-latest
     steps:
@@ -132,7 +159,7 @@ jobs:
   ci-ok:
     # The one check to require. It fails if any job above failed or was cancelled.
     if: always()
-    needs: [go, web, docker, e2e, k6]
+    needs: [go, go-integration, web, docker, e2e, k6]
     runs-on: ubuntu-latest
     steps:
       - name: Every job must have succeeded

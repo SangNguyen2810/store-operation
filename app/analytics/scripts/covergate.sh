@@ -2,7 +2,8 @@
 # Runs the Go tests with coverage and fails when a package is below its floor:
 # 90% for domain and app (the business rules), 80% for every other package.
 # Not gated: cmd/api (the composition root) and the two packages that only talk
-# to Postgres, adapters/postgres and platform/db, which have no unit tests.
+# to Postgres, adapters/postgres and platform/db, which have no unit tests (adapters/postgres
+# is tested against a real Pagila instead: `make test-integration`).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

@@ -33,8 +33,9 @@ The services in Docker reach Pagila on the host; set `DOCKER_DATABASE_URL` if yo
 | `make dev-analytics` / `dev-stores` / `dev-ranges` / `dev-gateway` | Run one service locally while the rest runs in Docker |
 | `make seed-presets` | Store [`infra/presets.json`](infra/presets.json) as the list of date ranges |
 | `make test` / `make check` | Go and web tests / plus lint, typecheck and build |
+| `make test-integration` | The Postgres adapters' SQL against a real Pagila on `localhost:5432` (override with `DATABASE_URL`; fails if there is no database) |
 | `make e2e` / `make k6-smoke` | Browser tests / API smoke test through the gateway (needs `make up`) |
-| `make ci` / `make ci-full` | Exactly what the CI pipeline runs: all services, the web app and the image builds / plus the browser and k6 tests (needs Pagila and k6) |
+| `make ci` / `make ci-full` | Exactly what the CI pipeline runs: all services, the web app and the image builds / plus the integration, browser and k6 tests (needs Pagila and k6) |
 
 ## CI/CD
 
@@ -43,15 +44,16 @@ The services in Docker reach Pagila on the host; set `DOCKER_DATABASE_URL` if yo
 | Job | Runs | Locally |
 |---|---|---|
 | `go` (one per service) | `gofmt`, `go vet`, tests with the coverage floors, tests with the race detector, a build | `make ci-go-analytics` (or `stores`, `ranges`, `gateway`, `redis`) |
+| `go-integration` | the stores and analytics SQL against a Pagila service (the tests carry the `integration` build tag, so `make ci` skips them) | `make test-integration` |
 | `web` | lint, typecheck, tests with the coverage floors, the production build | `make ci-web` |
 | `docker` | builds every image | `make ci-docker` |
 | `e2e`, `k6` | the Playwright suite and the k6 smoke test, against a Pagila service | `make ci-full` |
 | `ci-ok` | fails if any job above failed. Require this one check in branch protection | n/a |
 | `publish` | after `ci-ok`, on `main` and version tags only: pushes the images to `ghcr.io/<owner>/store-operation-<service>`, tagged with the commit SHA, `latest` (main) and the version (tags such as `v1.2.0`) | n/a |
 
+## Architecture
 
 ```mermaid
-## Architecture
 flowchart LR
     user([Staff member]) --> web["web<br/>React · TypeScript · Vite"]
     web -- "/api/*" --> gateway["gateway :8080<br/>routing · request id · access log<br/>rate limit · timeouts"]
@@ -84,8 +86,6 @@ How the pieces behave together:
 - **Optional cache.** With `CACHE_URL` set, the heavy queries (`analytics`) and store details (`stores`) are served from Redis through the redis service, with identical responses. If that service is down they answer from a small in-memory copy until each entry expires, then from Postgres.
 - **Date ranges are data.** `ranges` turns a list of definitions into concrete windows measured from the as-of date. `analytics` refuses any window that is not on that list. If `ranges` is down, `analytics` keeps using the last list it got, or the built-in one, so only `/api/presets` itself fails (`502`).
 - **Request path.** Browser → gateway (id, rate limit, log) → the owning service → Pagila, optionally through the cache. The same `X-Request-Id` appears in the gateway's and the services' logs.
-
-## Database
 
 ### Web app
 
@@ -135,6 +135,8 @@ app/web/src/
 - **Styling.** Tailwind utilities next to the markup, with no custom class names or `@apply`. Light and dark colours are CSS variables exposed as utilities (`bg-surface`, `text-ink`, `text-muted`, `border-line`, and so on); dark mode follows the OS setting, so components never write `dark:` variants. State is styled from ARIA and data attributes, and tests read those attributes, never utility classes.
 - **Responsive.** Mobile-first with two breakpoints, `sm` (640 px) and `lg` (1024 px). On a phone the filters fold behind a **Filters** button, the key figures are 2 × 2 and the sections stack; on desktop the filters are one row and revenue sits beside top films. Touch targets are 44 px. CSS does the sizing; only the chart's pixel height reads the viewport (`useBreakpoint`).
 - **Accessibility.** Keyboard-reachable controls, trends shown by arrow and text (not colour alone), and the chart has a text summary and a "show data as a table" view.
+
+## Database
 
 The app reads the [Pagila](https://github.com/devrimgunduz/pagila) sample database (PostgreSQL 17, `public` schema) and adds nothing to it. Row counts are from the sample data.
 
